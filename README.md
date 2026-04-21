@@ -53,9 +53,9 @@ See **`lab-llm-client/README.md`** for the full guide. Summary:
 5. Connect VSCode: `F1` → *Remote-SSH: Connect to Host* → `aleatico2`
 6. In the VSCode Remote-SSH terminal, run the member onboarding script:
    ```bash
-   bash ~/lab-llm-server/onboard.sh
+   bash ~/lab-llm-client/onboard.sh
    ```
-   This creates your per-member conda environment and installs all VSCode server-side extensions.
+   This installs VSCode server-side extensions and the MCP helper venv needed for codebase search.
 
 ---
 

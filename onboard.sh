@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 # =============================================================================
-# onboard.sh — One-time server-side setup for a new lab member.
+# onboard.sh — One-time setup for a new lab member.
 #
-# Run this once after connecting to any lab server via VSCode Remote-SSH.
-# It installs VSCode server-side extensions and (optionally) creates a
-# shared per-member conda environment.
+# Run this once on each machine where you want to use the workspace template:
+#   - Via Remote-SSH to aleatico2, aleatico1, merlot0, or any other lab server
+#   - Locally on your laptop or desktop (macOS / Linux)
+#
+# What it does:
+#   1. Creates a small per-user Python venv (~/.local/share/lab-mcp) with
+#      the MCP dependencies needed to run the codebase-search tool.
+#      This is separate from your project environments — you do not need
+#      to activate it. VSCode calls it automatically in the background.
+#   2. Installs VSCode extensions (server-side when used with Remote-SSH,
+#      local when run on a laptop). The Python extension will prompt you
+#      to pick an interpreter the first time you open a project; choose
+#      whichever conda/venv env you prefer and VSCode will remember it.
 #
 # Usage:
-#   ./onboard.sh [member-env-name]
-#   Default env-name: $USER
+#   bash ~/lab-llm-server/onboard.sh
 #
-# Run from the VSCode Remote-SSH integrated terminal.
+# Safe to re-run — all steps are idempotent.
 # =============================================================================
 set -euo pipefail
-
-MEMBER_ENV="${1:-$USER}"
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -23,56 +30,22 @@ info() { echo "[onboard] $*"; }
 warn() { echo "[onboard] WARNING: $*"; }
 
 # --------------------------------------------------------------------------- #
-# Detect conda
+# Per-user MCP venv (~/.local/share/lab-mcp)
+#
+# Tiny isolated venv (stdlib venv — no conda needed) that provides the
+# Python MCP runtime for the codebase-search tool. Works on any Linux or
+# macOS machine regardless of which conda installation (if any) is present.
 # --------------------------------------------------------------------------- #
-if ! command -v conda &>/dev/null; then
-    for prefix in /opt/conda /usr/local/conda ~/miniconda3 ~/anaconda3; do
-        if [[ -f "${prefix}/etc/profile.d/conda.sh" ]]; then
-            # shellcheck disable=SC1091
-            source "${prefix}/etc/profile.d/conda.sh"
-            break
-        fi
-    done
-fi
-command -v conda &>/dev/null || { warn "conda not found — skipping environment setup."; SKIP_CONDA=1; }
+MCP_VENV="${HOME}/.local/share/lab-mcp"
 
-# --------------------------------------------------------------------------- #
-# Create per-member conda environment (optional but recommended)
-# --------------------------------------------------------------------------- #
-if [[ -z "${SKIP_CONDA:-}" ]]; then
-    if conda env list | grep -qE "^${MEMBER_ENV}\s"; then
-        info "Conda environment '${MEMBER_ENV}' already exists. Skipping."
-    else
-        info "Creating per-member conda environment '${MEMBER_ENV}'..."
-        info "(Cloning from lab-base — this may take a few minutes)"
-        if conda env list | grep -qE "^lab-base\s"; then
-            conda create --name "${MEMBER_ENV}" --clone lab-base -y
-        else
-            warn "lab-base not found. Ask an admin to run server/setup.sh first."
-            warn "Creating minimal environment instead."
-            conda create --name "${MEMBER_ENV}" python=3.11 numpy scipy matplotlib pandas jupyter ipykernel -y
-        fi
-        conda run -n "${MEMBER_ENV}" python -m ipykernel install --user \
-            --name "${MEMBER_ENV}" \
-            --display-name "Python (${MEMBER_ENV})"
-        info "Environment '${MEMBER_ENV}' created and registered as Jupyter kernel."
-    fi
-fi
-
-# --------------------------------------------------------------------------- #
-# Create shared lab-mcp conda environment (MCP server for Roo Code codebase search)
-# This env is shared across all users — only created once on the server.
-# Path must match .vscode/settings.json: /opt/conda/envs/lab-mcp/bin/python
-# --------------------------------------------------------------------------- #
-MCP_ENV="lab-mcp"
-if conda env list | grep -q "^${MCP_ENV} "; then
-    info "Conda env '${MCP_ENV}' already exists — skipping."
+if [[ -x "${MCP_VENV}/bin/python" ]]; then
+    info "MCP venv already exists at ${MCP_VENV} — upgrading deps."
+    "${MCP_VENV}/bin/pip" install -q --upgrade "mcp[cli]" numpy requests
 else
-    info "Creating conda env '${MCP_ENV}' (shared MCP / codebase-search server)..."
-    conda create -n "${MCP_ENV}" python=3.11 -y
-    # mcp: MCP protocol + FastMCP; numpy: vector maths for similarity search
-    conda run -n "${MCP_ENV}" pip install "mcp[cli]" numpy requests
-    info "Conda env '${MCP_ENV}' ready."
+    info "Creating MCP venv at ${MCP_VENV}..."
+    python3 -m venv "${MCP_VENV}"
+    "${MCP_VENV}/bin/pip" install -q "mcp[cli]" numpy requests
+    info "MCP venv ready."
 fi
 
 # --------------------------------------------------------------------------- #
@@ -103,8 +76,8 @@ if command -v code &>/dev/null; then
     info "Extensions installed."
 else
     warn "'code' CLI not found."
-    warn "Make sure you are running this from the VSCode Remote-SSH integrated terminal,"
-    warn "not from a plain MobaXterm/WSL SSH session."
+    warn "Make sure you are running this from a VSCode integrated terminal"
+    warn "(Remote-SSH or local), not from a plain MobaXterm/WSL SSH session."
 fi
 
 # --------------------------------------------------------------------------- #
@@ -113,8 +86,12 @@ fi
 info ""
 info "=== Onboarding complete ==="
 info ""
-info "Your per-member conda env: ${MEMBER_ENV}"
-info "  Activate with: conda activate ${MEMBER_ENV}"
+info "MCP venv: ${MCP_VENV}"
 info ""
-info "For each new project, clone lab-workspace-template and run setup-env.sh."
-info "setup-env.sh will ask which env to use — enter '${MEMBER_ENV}' to reuse this one."
+info "Next steps:"
+info "  1. Reload the VSCode window: F1 → Developer: Reload Window"
+info "  2. Clone a project:  git clone https://github.com/<lab-org>/lab-workspace-template ~/M/my-project"
+info "  3. Open it in VSCode: File → Open Folder"
+info "  4. Select your Python interpreter when prompted (conda env, venv — your choice)."
+info ""
+info "Re-run this script on each machine where you want to use the workspace template."
