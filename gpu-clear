@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# =============================================================================
+# gpu-clear — Immediately unload all Ollama models from GPU memory.
+# Run this before launching CUDA-intensive scientific jobs.
+# Models will reload automatically on the next Roo Code / LLM request.
+# =============================================================================
+set -euo pipefail
+
+OLLAMA_API="http://127.0.0.1:11434"
+
+# Check Ollama is running
+if ! curl -sf "${OLLAMA_API}/api/tags" > /dev/null 2>&1; then
+    echo "Ollama is not running — nothing to clear."
+    exit 0
+fi
+
+# Get list of currently loaded models
+LOADED=$(curl -sf "${OLLAMA_API}/api/ps" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in data.get('models', []):
+    print(m['name'])
+" 2>/dev/null)
+
+if [[ -z "${LOADED}" ]]; then
+    echo "No models currently loaded in GPU memory."
+    exit 0
+fi
+
+echo "Unloading models from GPU memory:"
+while IFS= read -r model; do
+    echo "  → ${model}"
+    # Setting keep_alive=0 forces immediate unload
+    curl -sf -X POST "${OLLAMA_API}/api/generate" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\": \"${model}\", \"keep_alive\": 0}" > /dev/null
+done <<< "${LOADED}"
+
+sleep 1
+
+# Confirm
+STILL_LOADED=$(curl -sf "${OLLAMA_API}/api/ps" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+models = data.get('models', [])
+print(len(models))
+" 2>/dev/null)
+
+if [[ "${STILL_LOADED}" == "0" ]]; then
+    echo "GPU memory cleared. nvidia-smi:"
+    nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader 2>/dev/null || true
+else
+    echo "Warning: ${STILL_LOADED} model(s) may still be loaded. Check: ollama ps"
+fi

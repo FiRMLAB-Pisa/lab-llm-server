@@ -1,0 +1,47 @@
+# SearXNG — self-hosted meta search engine
+# ==========================================
+# Provides web search to the lab LLM stack via the web search MCP server.
+# Binds to localhost only (127.0.0.1:8080) — not exposed on the LAN.
+# The lab-websearch MCP service (port 3003) is the only caller.
+#
+# Requires: internet access on aleatico2.
+# If the server firewall session expires, web search will be unavailable
+# until the admin re-authenticates. Check the status dashboard (:3002).
+#
+# Start (admin, once):
+#   docker compose -f searxng-compose.yml up -d
+#
+# Logs:
+#   docker compose -f searxng-compose.yml logs -f
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+
+    ports:
+      # Bind to localhost only — accessed exclusively by lab-websearch-server.py
+      # (which is what lab members actually talk to via MCP)
+      - "127.0.0.1:8080:8080"
+
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-data:/etc/searxng
+
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  searxng-data:

@@ -1,0 +1,26 @@
+[Unit]
+Description=Lab Knowledge MCP Server (semantic search over /opt/lab-knowledge)
+Documentation=https://github.com/<lab-org>/lab-llm-server
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+ExecStart=/opt/conda/envs/lab-mcp/bin/python \
+    /opt/lab-server/lab-knowledge-server.py \
+    --root /opt/lab-knowledge \
+    --port 3001
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lab-knowledge
+
+# Allow enough time for the index to load on start
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+# SearXNG configuration — lab LLM stack
+# Minimal override over defaults (use_default_settings: true)
+# Full reference: https://docs.searxng.org/admin/settings/settings.html
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Lab Search"
+
+server:
+  # This is an internal-only instance. If ever exposed to the LAN, change this
+  # to a random secret: python3 -c "import secrets; print(secrets.token_hex(32))"
+  secret_key: "lab-internal-only-not-public-change-if-exposed"
+  base_url: "http://127.0.0.1:8080/"
+  limiter: false       # no rate limiting for internal use
+
+search:
+  formats:
+    - html
+    - json             # required for the MCP server's JSON API calls
+  default_lang: "en"
+  timeout_limit: 10.0
+  max_page: 1
+
+# Curated engine set — fast and relevant for research code use cases.
+# Disabling slow or unreliable engines improves latency.
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: arxiv
+    disabled: false
+  - name: github
+    disabled: false
+  - name: semantic scholar
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: stackoverflow
+    disabled: false

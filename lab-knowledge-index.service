@@ -1,0 +1,15 @@
+[Unit]
+Description=Rebuild lab knowledge index
+After=ollama.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/conda/envs/lab-mcp/bin/python \
+    /opt/lab-server/lab-knowledge-index.py \
+    --root /opt/lab-knowledge
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lab-knowledge-index
+# Allow up to 4 hours for large repos (first run may embed many files)
+TimeoutStartSec=14400

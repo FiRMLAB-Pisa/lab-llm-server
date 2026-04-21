@@ -1,0 +1,64 @@
+# OpenHands — async background coding agent
+# ============================================
+# OpenHands is a browser-based AI coding agent.  Users describe a task, and it
+# runs autonomously in a sandboxed container: reads files, edits code, runs
+# tests, fixes errors — all in the background without the user being present.
+#
+# Access: http://aleatico2.imago7.local:3000
+#   (from any lab desktop or laptop on GlobalProtect VPN)
+#
+# LLM backend: Ollama on the host (aleatico2), same models as Roo Code.
+#   deepseek-r1:32b is used by default.  Users can switch model in the UI.
+#
+# To start (admin, once):
+#   cd server && docker compose -f openhands-compose.yml up -d
+#
+# To stop:
+#   docker compose -f openhands-compose.yml down
+#
+# Logs:
+#   docker compose -f openhands-compose.yml logs -f
+
+services:
+  openhands:
+    image: docker.all-hands.dev/all-hands-ai/openhands:latest
+    container_name: openhands
+    restart: unless-stopped
+
+    ports:
+      # Bind to all interfaces — accessible on lab LAN and GlobalProtect VPN.
+      # Do not expose to the public internet.
+      - "0.0.0.0:3000:3000"
+
+    volumes:
+      # Docker socket so OpenHands can spin up per-task sandbox containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent storage for sessions, settings, history
+      - openhands-data:/app/openhands/storage
+      # Lab user home directories (includes ~/M symlinks to shared storage).
+      # Mount read-write so OpenHands can edit files and write results.
+      - /home:/home:rw
+
+    environment:
+      # ----- LLM backend -----
+      # Points to Ollama on the host.  host.docker.internal resolves to the
+      # host via the extra_hosts entry below.
+      - LLM_MODEL=ollama/deepseek-r1:32b
+      - LLM_BASE_URL=http://host.docker.internal:11434
+      - LLM_API_KEY=ollama           # required field, value is ignored by Ollama
+
+      # ----- Sandbox runtime -----
+      # The sandbox container that actually runs the agent's shell commands.
+      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:latest
+
+      # ----- Optional: default workspace -----
+      # Users can override this per-session in the UI.
+      # Set to /home to let users navigate to their own project directory.
+      - WORKSPACE_BASE=/home
+
+    extra_hosts:
+      # Lets "host.docker.internal" resolve to the host machine (Linux Docker).
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  openhands-data:

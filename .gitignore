@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# Lab knowledge index (generated on server — do not commit)
+/opt/lab-knowledge/.index/
+
+# Editor
+.vscode/*.code-workspace
+.DS_Store
+
+# Environment
+.env

@@ -1,0 +1,21 @@
+[Unit]
+Description=Lab Web Search MCP Server (wraps SearXNG, port 3003)
+Documentation=https://github.com/<lab-org>/lab-llm-server
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+ExecStart=/opt/conda/envs/lab-mcp/bin/python \
+    /opt/lab-server/lab-websearch-server.py 3003
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lab-websearch
+
+[Install]
+WantedBy=multi-user.target
