@@ -23,11 +23,13 @@ sudo bash setup.sh
 
 `setup.sh` does the following automatically (takes 20–40 min, mostly model downloads):
 1. Installs Ollama and configures it as a systemd service bound to all interfaces
-2. Pulls all models: `deepseek-r1:32b`, `qwen2.5-coder:14b`, `deepseek-r1:7b`, `nomic-embed-text`
+2. Pulls all models: `deepseek-r1:32b`, `qwen2.5-coder:14b`, `deepseek-r1:7b`, `nomic-embed-text`, `starcoder2:3b`
 3. Installs the `gpu-clear` script
 4. Installs Docker and starts the OpenHands background agent on port 3000
 5. Installs the lab knowledge MCP service on port 3001
-6. Prints a verification summary
+6. Installs the lab status dashboard on port 3002
+7. Installs SearXNG (internal meta search) and the web search MCP service on port 3003
+8. Runs a quick verification and prints a summary of all service URLs
 
 > **Tip:** The 32B model is ~20 GB. Run setup in a `tmux` session so it survives
 > disconnection: `tmux new -s setup && sudo bash setup.sh`
@@ -47,7 +49,7 @@ Expected: all `[PASS]` lines. Failures print the exact remediation command.
 See **`lab-llm-client/README.md`** for the full guide. Summary:
 
 1. Install VSCode + Remote-SSH extension
-2. Run `bash lab-llm-client/check-connectivity.sh` (confirms LAN/VPN access)
+2. Run `bash ~/lab-llm-client/check-connectivity.sh` (confirms LAN/VPN access)
 3. Add SSH key to all servers (one-time — no more password prompts)
 4. Add the SSH config block for all lab servers
 5. Connect VSCode: `F1` → *Remote-SSH: Connect to Host* → `aleatico2`
@@ -65,32 +67,15 @@ See **`lab-llm-client/README.md`** for the full guide. Summary:
 git clone https://github.com/<lab-org>/lab-workspace-template ~/M/my-project
 cd ~/M/my-project
 git config core.hooksPath .git-hooks          # prevents committing personal interpreter path
-conda activate <YOUR_ENV>
-pip install -r requirements.txt               # skip if empty
 ```
 
-Then `File → Open Folder → ~/M/my-project` in VSCode.
-Roo Code is pre-configured — open the panel and start chatting.
+Then `File → Open Folder → ~/M/my-project` in VSCode. The Python extension will prompt
+you to select an interpreter — pick whichever conda env or venv you prefer; VSCode remembers
+it per-machine. Roo Code is pre-configured — open the panel and start chatting.
 
 ---
 
-## Step 4 — Try the Examples (verify end-to-end)
-
-| File | What to try |
-|---|---|
-| `examples/mri_signal.py` | Roo Code **Ask** mode → *"What does ernst_angle compute?"* |
-| `examples/mri_signal.py` | Roo Code **Code** mode → *"Add an inversion recovery signal function"* |
-| `examples/kspace.py` | Roo Code **Code** mode → *"Write pytest tests for all public functions"* |
-| `examples/workflows.ipynb` | Follow the embedded workflow instructions in each cell |
-
-For the background agent:
-1. Open `http://aleatico2.imago7.local:3000`
-2. Set workspace to `/home/<you>/M/my-project`
-3. Paste the OpenHands task from `examples/workflows.ipynb` (Workflow I)
-
----
-
-## Step 5 — Populate the Lab Knowledge Base (admin, as material becomes available)
+## Step 4 — Populate the Lab Knowledge Base (admin, as material becomes available)
 
 Drop any source code, SDK headers, or documentation into `/opt/lab-knowledge/`:
 
@@ -144,29 +129,6 @@ If you need to run a GPU-intensive job (PyTorch, TensorFlow, CUDA):
 5. **After finishing:** Ollama reloads models automatically on the next LLM request.
 
 > If you skip `gpu-clear`, your job may fail with "CUDA out of memory".
-
----
-
-## Shared Conda Environments (admin, run once)
-
-```bash
-source /opt/conda/etc/profile.d/conda.sh
-
-# Common scientific stack
-conda create -n lab-base -y python=3.11 numpy scipy matplotlib pandas \
-    jupyter ipykernel scikit-learn tqdm
-
-# Neuroimaging (hard-link clone — minimal extra disk)
-conda create -n lab-neuro --clone lab-base -y
-conda run -n lab-neuro pip install nibabel nilearn dipy antspy
-
-# MRI physics / pulse sequences
-conda create -n lab-mri --clone lab-base -y
-conda run -n lab-mri pip install sigpy ismrmrd twixtools
-```
-
-`conda create --clone` uses hard links — far less disk than independent environments.
-Check disk usage: `du -sh /opt/conda/envs/*`
 
 ---
 
@@ -252,10 +214,6 @@ docker compose -f ~/lab-llm-server/searxng-compose.yml logs -f
 # If internet connectivity is restored after firewall re-auth:
 docker compose -f ~/lab-llm-server/searxng-compose.yml restart
 
-# Status dashboard
-sudo systemctl status lab-status
-journalctl -fu lab-status
-
 # Free GPU before a scientific job
 sudo gpu-clear
 ```
@@ -279,7 +237,7 @@ All services are configured to **restart automatically** on crash and on server 
 sudo bash ~/lab-llm-server/restart-services.sh
 ```
 
-Restarts all four services in order and prints their status. Takes under 10 seconds.
+Restarts all five services in order and prints their status. Takes under 10 seconds.
 
 ### Restart a single service
 
@@ -306,3 +264,53 @@ docker compose -f ~/lab-llm-server/openhands-compose.yml up -d
 - Do **not** expose ports 11434, 3000, 3001, 3002, or 3003 to the public internet.
 - If `aleatico2` ever gets a public IP, add nginx basic auth in front of each service.
 - **Firewall note:** the lab firewall occasionally drops aleatico2’s internet access and requires manual re-authentication. When this happens, web search returns a connectivity error; all local tools (Roo Code, codebase search, lab knowledge) remain fully functional.
+---
+
+## Migrating to a New Host Machine
+
+If you need to move the LLM stack to a different server (hardware upgrade, machine swap, etc.):
+
+### 1. Set up the new machine
+
+```bash
+git clone https://github.com/<lab-org>/lab-llm-server ~/lab-llm-server
+cd ~/lab-llm-server
+sudo bash setup.sh          # ~20–40 min (model downloads)
+bash smoke-test.sh          # verify all [PASS]
+```
+
+### 2. Update the hostname in three repos
+
+The hostname `aleatico2.imago7.local` is referenced in **three places**. If the new machine has a different hostname, update all of them and push:
+
+| File | What to change |
+|---|---|
+| `lab-workspace-template/.vscode/settings.json` | `openAiBaseUrl` + all three MCP server `url` fields |
+| `lab-llm-client/check-connectivity.sh` | All server hostnames |
+| `lab-llm-server/openhands-compose.yml` | `SANDBOX_RUNTIME_CONTAINER_IMAGE` env if host-referenced |
+
+> **Simplest alternative:** configure DNS/DHCP so the new machine answers to the same
+> `aleatico2.imago7.local` name — then no file changes are needed.
+
+### 3. Propagate to lab members
+
+Commit and push the updated `lab-workspace-template`. Members get the new hostname
+automatically on their next `git pull` in any project and `F1 → Developer: Reload Window`.
+
+They do **not** need to re-run `onboard.sh` — extensions and the MCP venv remain valid.
+
+### 4. Transfer the knowledge base (optional)
+
+The lab knowledge index lives at `/opt/lab-knowledge/` on the old machine:
+
+```bash
+# On the old machine — archive the knowledge base
+sudo tar -czf /tmp/lab-knowledge.tar.gz /opt/lab-knowledge/
+
+# Copy to new machine (run from the old machine)
+scp /tmp/lab-knowledge.tar.gz <YOU>@<new-host>:/tmp/
+
+# On the new machine — restore
+sudo tar -xzf /tmp/lab-knowledge.tar.gz -C /
+sudo systemctl start lab-knowledge-index.service   # rebuild embeddings
+```
