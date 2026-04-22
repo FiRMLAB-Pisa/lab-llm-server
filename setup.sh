@@ -300,7 +300,7 @@ if [[ ! -x "${LAB_PY}" ]]; then
     LAB_PY="${LAB_CONDA_PY}"
 fi
 info "Installing/upgrading Python packages in lab-mcp env..."
-sudo "${LAB_PY}" -m pip install -q --upgrade "mcp[cli]" numpy requests "rank-bm25" "sentence-transformers"
+sudo "${LAB_PY}" -m pip install -q --upgrade "mcp[cli]" numpy requests "rank-bm25" "sentence-transformers" uvicorn
 info "Python packages ready."
 
 # Pre-download the cross-encoder reranker model so the first query isn't slow.
@@ -349,14 +349,22 @@ sudo cp "${SCRIPT_DIR}/lab-knowledge.service"       /etc/systemd/system/
 sudo cp "${SCRIPT_DIR}/lab-knowledge-index.service" /etc/systemd/system/
 sudo cp "${SCRIPT_DIR}/lab-knowledge-index.timer"   /etc/systemd/system/
 # Patch unit files to use the interpreter selected above (conda or venv fallback).
-# Handle both space and backslash line continuation by replacing the entire path.
-sudo sed -i "s|ExecStart=/opt/conda/envs/lab-mcp/bin/python|ExecStart=${LAB_PY}|" \
+# Use printf to properly escape the replacement path, then apply sed.
+ESCAPED_LAB_PY=$(printf '%s\n' "${LAB_PY}" | sed -e 's/[\/&]/\\&/g')
+sudo sed -i "s|ExecStart=/opt/conda/envs/lab-mcp/bin/python|ExecStart=${ESCAPED_LAB_PY}|" \
     /etc/systemd/system/lab-knowledge.service \
     /etc/systemd/system/lab-knowledge-index.service
+# Verify the patch was applied
+if grep -q "${LAB_PY}" /etc/systemd/system/lab-knowledge.service; then
+    info "Lab knowledge systemd units patched successfully."
+else
+    warn "Lab knowledge systemd units patch may have failed. Check manually:"
+    warn "  cat /etc/systemd/system/lab-knowledge.service | grep ExecStart"
+fi
 sudo systemctl daemon-reload
 sudo systemctl enable lab-knowledge.service lab-knowledge-index.timer
-sudo systemctl start  lab-knowledge.service
-sudo systemctl start  lab-knowledge-index.timer
+sudo systemctl restart lab-knowledge.service
+sudo systemctl restart lab-knowledge-index.timer
 
 info ""
 info "Lab knowledge MCP service started on port 3001."
@@ -375,7 +383,7 @@ sudo chmod 755 "${INSTALL_DIR}/lab-status-server.py"
 sudo cp "${SCRIPT_DIR}/lab-status.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable lab-status.service
-sudo systemctl start  lab-status.service
+sudo systemctl restart lab-status.service
 info "Lab status dashboard started on port 3002."
 
 # --------------------------------------------------------------------------- #
@@ -390,13 +398,24 @@ info "Installing web search MCP server..."
 sudo cp "${SCRIPT_DIR}/lab-websearch-server.py" "${INSTALL_DIR}/"
 sudo chmod 755 "${INSTALL_DIR}/lab-websearch-server.py"
 sudo cp "${SCRIPT_DIR}/lab-websearch.service" /etc/systemd/system/
+# Patch websearch service to use the correct Python interpreter
+sudo sed -i "s|ExecStart=/opt/conda/envs/lab-mcp/bin/python|ExecStart=${ESCAPED_LAB_PY}|" \
+    /etc/systemd/system/lab-websearch.service
 sudo systemctl daemon-reload
 sudo systemctl enable lab-websearch.service
-sudo systemctl start  lab-websearch.service
+sudo systemctl restart lab-websearch.service
 info "Web search MCP server started on port 3003."
 info "NOTE: Web search requires internet access on aleatico2."
 info "      If the lab firewall drops the connection, re-authenticate and"
 info "      run: sudo systemctl restart lab-websearch"
+
+# Ensure embedding model is present (needed by lab-knowledge indexing/search).
+if ollama list | awk 'NR>1 {print $1}' | grep -Eq '^nomic-embed-text(:|$)'; then
+    info "Embedding model already present: nomic-embed-text"
+else
+    info "Pulling required embedding model: nomic-embed-text..."
+    ollama pull nomic-embed-text
+fi
 
 # --------------------------------------------------------------------------- #
 # 9. Verify

@@ -309,7 +309,9 @@ def main() -> None:
         f"[lab-knowledge] Roo Code endpoint: "
         f"http://aleatico2.imago7.local:{args.port}/sse\n"
     )
-    mcp.run(transport="sse", host="0.0.0.0", port=args.port)
+        # FastMCP doesn't accept host/port in .run(), use uvicorn instead
+        import uvicorn
+        uvicorn.run(mcp.app, host="0.0.0.0", port=args.port, log_level="info")
 
 
 if __name__ == "__main__":

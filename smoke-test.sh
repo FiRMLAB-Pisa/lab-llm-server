@@ -38,10 +38,14 @@ else
 fi
 
 # Check network binding (must be 0.0.0.0, not 127.0.0.1)
-if ss -tlnp | grep -q "0.0.0.0:11434"; then
-    pass "Ollama bound to 0.0.0.0:11434 (LAN/VPN accessible)"
+if ss -tln | grep -Eq '(:|\*)11434\b'; then
+    if ss -tln | grep -Eq '0\.0\.0\.0:11434|\*:11434|\[::\]:11434'; then
+        pass "Ollama listening on all interfaces for :11434 (LAN/VPN accessible)"
+    else
+        fail "Ollama is listening, but not on all interfaces for :11434"
+    fi
 else
-    fail "Ollama is NOT bound to 0.0.0.0:11434 — check systemd drop-in config"
+    fail "Ollama is NOT listening on :11434 — check systemd drop-in config"
 fi
 
 # --------------------------------------------------------------------------- #
@@ -49,14 +53,10 @@ section "Models"
 # --------------------------------------------------------------------------- #
 
 AVAILABLE=$(curl -sf "${OLLAMA_URL}/api/tags" | python3 -c \
-    "import sys,json; tags=json.load(sys.stdin)['models']; \
-     [print(m['name'].split(':')[0]+':'+m['name'].split(':')[1] if ':' in m['name'] else m['name']) \
-      for m in tags]" 2>/dev/null)
+    "import sys,json; tags=json.load(sys.stdin).get('models', []); [print(m.get('name','')) for m in tags]" 2>/dev/null)
 
 for model in "${REQUIRED_MODELS[@]}"; do
-    # Match by prefix (e.g. "deepseek-r1:32b" matches "deepseek-r1:32b-...")
-    base="${model%%:*}:${model##*:}"
-    if echo "${AVAILABLE}" | grep -q "^${model}$"; then
+    if echo "${AVAILABLE}" | grep -Eq "^${model}(:|$)"; then
         pass "Model available: ${model}"
     else
         fail "Model NOT available: ${model} — run: ollama pull ${model}"
@@ -112,10 +112,10 @@ section "OpenHands"
 
 if command -v docker &>/dev/null; then
     pass "Docker installed"
-    if docker compose -f "$(dirname "$0")/openhands-compose.yml" ps --quiet 2>/dev/null | grep -q .; then
+    if docker compose -f "$(dirname "$0")/openhands-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
         pass "OpenHands container is running"
     else
-        fail "OpenHands container is NOT running — run: docker compose -f server/openhands-compose.yml up -d"
+        fail "OpenHands container is NOT running — run: docker compose -f ./openhands-compose.yml up -d"
     fi
     if curl -sf "${OPENHANDS_URL}" > /dev/null; then
         pass "OpenHands UI reachable at ${OPENHANDS_URL}"
@@ -131,7 +131,7 @@ section "Web Search (SearXNG + web search MCP)"
 # --------------------------------------------------------------------------- #
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if docker compose -f "${SCRIPT_DIR}/searxng-compose.yml" ps --quiet 2>/dev/null | grep -q .; then
+if docker compose -f "${SCRIPT_DIR}/searxng-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
     pass "SearXNG container is running"
 else
     fail "SearXNG container is NOT running — run: docker compose -f ~/lab-llm-server/searxng-compose.yml up -d"
@@ -160,7 +160,10 @@ fi
 section "Lab Knowledge MCP (port 3001)"
 # --------------------------------------------------------------------------- #
 
-LAB_PY="/opt/conda/envs/lab-mcp/bin/python"
+LAB_PY=$(systemctl show -p ExecStart --value lab-knowledge 2>/dev/null | awk '{print $1}' | head -1)
+if [[ -z "${LAB_PY}" ]]; then
+    LAB_PY="/opt/conda/envs/lab-mcp/bin/python"
+fi
 
 if systemctl is-active --quiet lab-knowledge; then
     pass "lab-knowledge.service is active"
@@ -168,8 +171,10 @@ else
     fail "lab-knowledge.service is NOT active — run: sudo systemctl start lab-knowledge"
 fi
 
-if curl -sf --max-time 3 'http://127.0.0.1:3001/sse' > /dev/null 2>&1 || \
-   curl -sf --max-time 3 'http://127.0.0.1:3001/' > /dev/null 2>&1; then
+if ss -tln | grep -Eq '(:|\*)3001\b'; then
+    pass "Lab knowledge service listening on :3001"
+elif curl -sf --max-time 3 'http://127.0.0.1:3001/sse' > /dev/null 2>&1 || \
+     curl -sf --max-time 3 'http://127.0.0.1:3001/' > /dev/null 2>&1; then
     pass "Lab knowledge MCP SSE endpoint reachable at :3001"
 else
     fail "Lab knowledge MCP not reachable at :3001 — check: journalctl -fu lab-knowledge"
@@ -188,12 +193,12 @@ if [[ -x "${LAB_PY}" ]]; then
     # Functional reranker check: actually score a pair
     RERANKER_OK=$("${LAB_PY}" -c "
 from sentence_transformers import CrossEncoder
-m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
 s = m.predict([('T1 relaxation', 'T1 is the longitudinal relaxation time constant')])
 print('ok' if float(s[0]) > -10 else 'bad')
 " 2>/dev/null)
     if [[ "${RERANKER_OK}" == "ok" ]]; then
-        pass "Cross-encoder reranker functional (ms-marco-MiniLM-L-6-v2)"
+        pass "Cross-encoder reranker functional (ms-marco-MiniLM-L6-v2)"
     else
         fail "Cross-encoder reranker not working — check model cache or sentence-transformers install"
     fi
