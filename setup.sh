@@ -17,6 +17,12 @@ OLLAMA_NUM_PARALLEL="10"   # serve up to 10 concurrent requests per model
 # This is safe on a trusted internal lab network (GlobalProtect VPN).
 OLLAMA_HOST="0.0.0.0:11434"
 
+# Optional pre-fetched asset cache (populated by prefetch-llm-assets.sh run on
+# a fast machine and rsync'd here).  Create the directory on aleatico2 with:
+#   sudo mkdir -p /srv/llm-cache && sudo chmod 1777 /srv/llm-cache
+# Leave empty to always download from the internet.
+PRELOAD_DIR="/srv/llm-cache"
+
 # Models to pull (Ollama registry tags)
 # deepseek-r1:32b   → Architect mode  (~20 GB VRAM, Q4_K_M)
 # qwen2.5-coder:14b → Code/Agent mode (~9 GB VRAM, Q4_K_M)
@@ -44,11 +50,18 @@ require_cmd() { command -v "$1" &>/dev/null || die "Required command '$1' not fo
 # 1. Install Ollama
 # --------------------------------------------------------------------------- #
 info "Installing Ollama..."
-if command -v ollama &>/dev/null; then
+OLLAMA_CACHED_BIN="${PRELOAD_DIR}/ollama"
+if command -v ollama &>/dev/null && ollama --version &>/dev/null 2>&1; then
     CURRENT_VER=$(ollama --version 2>/dev/null | awk '{print $NF}')
     info "Ollama already installed (${CURRENT_VER}). Skipping install."
+elif [[ -x "${OLLAMA_CACHED_BIN}" ]]; then
+    info "Found cached Ollama binary at ${OLLAMA_CACHED_BIN} — installing from cache."
+    sudo cp "${OLLAMA_CACHED_BIN}" /usr/local/bin/ollama
+    sudo chmod +x /usr/local/bin/ollama
+    info "Ollama installed from cache."
 else
     require_cmd curl
+    info "Downloading Ollama from internet..."
     curl -fsSL https://ollama.com/install.sh | sh
     info "Ollama installed."
 fi
@@ -59,6 +72,17 @@ fi
 info "Configuring Ollama systemd service..."
 DROPIN_DIR="/etc/systemd/system/ollama.service.d"
 sudo mkdir -p "${DROPIN_DIR}"
+
+# Ensure Ollama model directory exists and is writable by the service user.
+# Some fresh installs do not pre-create /var/lib/ollama, causing startup to fail
+# with: "permission denied: mkdir /var/lib/ollama".
+if ! getent passwd ollama >/dev/null; then
+    info "Creating system user 'ollama'..."
+    sudo useradd -r -s /usr/sbin/nologin -U ollama
+fi
+sudo mkdir -p "${OLLAMA_MODELS_DIR}"
+sudo chown -R ollama:ollama "$(dirname "${OLLAMA_MODELS_DIR}")"
+sudo chmod 750 "$(dirname "${OLLAMA_MODELS_DIR}")"
 
 sudo tee "${DROPIN_DIR}/override.conf" > /dev/null <<EOF
 # Ollama lab configuration — managed by lab LLM setup
@@ -106,6 +130,17 @@ info "gpu-clear installed to /usr/local/bin/gpu-clear"
 # 4. Pull models
 # --------------------------------------------------------------------------- #
 info "Pulling models — this will take a while on first run..."
+
+# If a pre-fetched model cache exists, seed OLLAMA_MODELS_DIR from it first.
+# ollama pull will then detect existing blobs and skip re-downloading them.
+PRELOAD_MODELS="${PRELOAD_DIR}/models"
+if [[ -d "${PRELOAD_MODELS}/blobs" ]]; then
+    info "Found pre-fetched model cache at ${PRELOAD_MODELS} — seeding model store..."
+    sudo mkdir -p "${OLLAMA_MODELS_DIR}"
+    sudo rsync -a --ignore-existing "${PRELOAD_MODELS}/" "${OLLAMA_MODELS_DIR}/"
+    info "Model cache seeded. ollama pull will skip already-present blobs."
+fi
+
 for model in "${MODELS[@]}"; do
     info "Pulling ${model}..."
     ollama pull "${model}"
