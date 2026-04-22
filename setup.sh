@@ -292,24 +292,29 @@ info "Python packages ready."
 # If HuggingFace is unreachable (SSL inspection, firewall, etc.), skip silently
 # and gracefully degrade. First query will be slower, but will work.
 # Reranker model is optional and requires internet access without SSL inspection.
-# If your network intercepts HTTPS with a self-signed cert, we'll monkeypatch requests.
+# If your network intercepts HTTPS with a self-signed cert, we'll monkeypatch httpx.
 info "Pre-downloading cross-encoder reranker model (66 MB, optional)..."
 
 if timeout 60 sudo env HF_HUB_DISABLE_HTTPS_VERIFY="${DISABLE_SSL_VERIFY_FOR_HF}" "${LAB_PY}" -c "
 import os
+import ssl
 os.environ['HF_HUB_DISABLE_HTTPS_VERIFY'] = '${DISABLE_SSL_VERIFY_FOR_HF}'
 
-# Monkeypatch requests to disable SSL verification
-import requests
-requests.packages.urllib3.disable_warnings()
+# Monkeypatch httpx's SSL context (used by huggingface_hub)
 try:
-    from requests.packages.urllib3.util.ssl_ import create_urllib3_context
-    ctx = create_urllib3_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = __import__('ssl').CERT_NONE
-    requests.packages.urllib3.util.ssl_.create_urllib3_context = lambda *a, **k: ctx
-except Exception:
-    pass
+    import httpx
+    def _no_verify_context(*args, **kwargs):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    httpx._config.DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+    # Patch SSL context creation in httpx
+    import httpx._client
+    if hasattr(httpx._client, '_create_ssl_context'):
+        httpx._client._create_ssl_context = _no_verify_context
+except Exception as e:
+    print(f'httpx monkeypatch failed (non-critical): {e}')
 
 # Load the model
 from sentence_transformers import CrossEncoder
