@@ -48,6 +48,22 @@ warn()  { echo "[WARN]  $*"; }
 die()   { echo "[ERROR] $*" >&2; exit 1; }
 require_cmd() { command -v "$1" &>/dev/null || die "Required command '$1' not found."; }
 
+install_python_venv_deps() {
+    # Best-effort install of system packages needed for python -m venv + pip.
+    if command -v apt-get &>/dev/null; then
+        sudo apt-get update -y
+        sudo apt-get install -y python3-venv python3-pip
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y python3-pip python3-virtualenv
+    elif command -v yum &>/dev/null; then
+        sudo yum install -y python3-pip python3-virtualenv
+    elif command -v zypper &>/dev/null; then
+        sudo zypper --non-interactive install python3-pip python3-virtualenv
+    else
+        warn "No supported package manager found to auto-install python venv deps."
+    fi
+}
+
 # --------------------------------------------------------------------------- #
 # 1. Install Ollama
 # --------------------------------------------------------------------------- #
@@ -235,7 +251,24 @@ if [[ ! -x "${LAB_PY}" ]]; then
         require_cmd python3
         sudo mkdir -p "${INSTALL_DIR}"
         if [[ ! -x "${LAB_VENV_DIR}/bin/python" ]]; then
-            sudo python3 -m venv "${LAB_VENV_DIR}"
+            if ! sudo python3 -m venv "${LAB_VENV_DIR}"; then
+                warn "python3 -m venv failed; attempting to install venv dependencies..."
+                install_python_venv_deps
+                sudo python3 -m venv "${LAB_VENV_DIR}" || \
+                    die "Failed to create venv at ${LAB_VENV_DIR}."
+            fi
+        fi
+
+        # Some distro builds create venv without pip unless python3-venv is installed.
+        if ! sudo "${LAB_VENV_DIR}/bin/python" -m pip --version &>/dev/null; then
+            warn "pip missing in venv; attempting bootstrap via ensurepip..."
+            if ! sudo "${LAB_VENV_DIR}/bin/python" -m ensurepip --upgrade; then
+                warn "ensurepip failed; attempting to install system python venv dependencies..."
+                install_python_venv_deps
+                if ! sudo "${LAB_VENV_DIR}/bin/python" -m ensurepip --upgrade; then
+                    die "Could not bootstrap pip in ${LAB_VENV_DIR}. Install python3-venv and retry."
+                fi
+            fi
         fi
         sudo "${LAB_VENV_DIR}/bin/python" -m pip install -q --upgrade pip
         LAB_PY="${LAB_VENV_DIR}/bin/python"
