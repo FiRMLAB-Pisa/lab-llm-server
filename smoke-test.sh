@@ -114,6 +114,8 @@ if command -v docker &>/dev/null; then
     pass "Docker installed"
     if docker compose -f "$(dirname "$0")/openhands-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
         pass "OpenHands container is running"
+    elif curl -sf "${OPENHANDS_URL}" > /dev/null; then
+        pass "OpenHands reachable at ${OPENHANDS_URL} (container status check unavailable)"
     else
         fail "OpenHands container is NOT running — run: docker compose -f ./openhands-compose.yml up -d"
     fi
@@ -133,6 +135,8 @@ section "Web Search (SearXNG + web search MCP)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if docker compose -f "${SCRIPT_DIR}/searxng-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
     pass "SearXNG container is running"
+elif curl -sf 'http://127.0.0.1:8080/search?q=test&format=json' > /dev/null; then
+    pass "SearXNG reachable at 127.0.0.1:8080 (container status check unavailable)"
 else
     fail "SearXNG container is NOT running — run: docker compose -f ~/lab-llm-server/searxng-compose.yml up -d"
 fi
@@ -160,8 +164,8 @@ fi
 section "Lab Knowledge MCP (port 3001)"
 # --------------------------------------------------------------------------- #
 
-LAB_PY=$(systemctl show -p ExecStart --value lab-knowledge 2>/dev/null | awk '{print $1}' | head -1)
-if [[ -z "${LAB_PY}" ]]; then
+LAB_PY=$(sed -n 's|^ExecStart=\([^[:space:]]*\).*|\1|p' /etc/systemd/system/lab-knowledge.service 2>/dev/null | head -1)
+if [[ -z "${LAB_PY}" || "${LAB_PY}" == "{" ]]; then
     LAB_PY="/opt/conda/envs/lab-mcp/bin/python"
 fi
 

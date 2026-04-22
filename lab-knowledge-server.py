@@ -56,7 +56,7 @@ DEFAULT_PORT    = 3001
 OLLAMA_BASE     = "http://aleatico2.imago7.local:11434"
 EMBED_MODEL     = "nomic-embed-text"
 RELOAD_SECS     = 60      # check for index updates every 60 s
-RERANKER_MODEL  = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # 66 MB, CPU, ~3 ms/pair
+RERANKER_MODEL  = "cross-encoder/ms-marco-MiniLM-L6-v2"  # 66 MB, CPU, ~3 ms/pair
 # CANDIDATE_K scales with corpus: 1% of chunks, clamped to [20, 100].
 # Small corpus → 20; large corpus → 100.  Reranker only helps what it sees.
 CANDIDATE_K     = 20      # floor; overridden at query time based on index size
@@ -75,7 +75,7 @@ _index_mtime: float             = 0.0
 _lock         = threading.RLock()
 _ready        = threading.Event()
 
-mcp = FastMCP("lab-knowledge")
+mcp = FastMCP("lab-knowledge", transport="sse", port=DEFAULT_PORT, host="0.0.0.0")
 
 
 def _tokenize(text: str) -> list[str]:
@@ -309,9 +309,12 @@ def main() -> None:
         f"[lab-knowledge] Roo Code endpoint: "
         f"http://aleatico2.imago7.local:{args.port}/sse\n"
     )
-        # FastMCP doesn't accept host/port in .run(), use uvicorn instead
-        import uvicorn
-        uvicorn.run(mcp.app, host="0.0.0.0", port=args.port, log_level="info")
+    if args.port != DEFAULT_PORT:
+        sys.stderr.write(
+            f"[lab-knowledge] WARNING: FastMCP in this environment uses constructor-bound port; "
+            f"requested --port={args.port}, using {DEFAULT_PORT}.\n"
+        )
+    mcp.run()
 
 
 if __name__ == "__main__":

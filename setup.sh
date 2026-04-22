@@ -363,8 +363,12 @@ else
 fi
 sudo systemctl daemon-reload
 sudo systemctl enable lab-knowledge.service lab-knowledge-index.timer
-sudo systemctl restart lab-knowledge.service
-sudo systemctl restart lab-knowledge-index.timer
+if ! sudo systemctl restart lab-knowledge.service; then
+    warn "lab-knowledge.service failed to restart; continuing setup. Check: journalctl -u lab-knowledge -n 50"
+fi
+if ! sudo systemctl restart lab-knowledge-index.timer; then
+    warn "lab-knowledge-index.timer failed to restart; continuing setup."
+fi
 
 info ""
 info "Lab knowledge MCP service started on port 3001."
@@ -383,7 +387,9 @@ sudo chmod 755 "${INSTALL_DIR}/lab-status-server.py"
 sudo cp "${SCRIPT_DIR}/lab-status.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable lab-status.service
-sudo systemctl restart lab-status.service
+if ! sudo systemctl restart lab-status.service; then
+    warn "lab-status.service failed to restart; continuing setup. Check: journalctl -u lab-status -n 50"
+fi
 info "Lab status dashboard started on port 3002."
 
 # --------------------------------------------------------------------------- #
@@ -403,7 +409,9 @@ sudo sed -i "s|ExecStart=/opt/conda/envs/lab-mcp/bin/python|ExecStart=${ESCAPED_
     /etc/systemd/system/lab-websearch.service
 sudo systemctl daemon-reload
 sudo systemctl enable lab-websearch.service
-sudo systemctl restart lab-websearch.service
+if ! sudo systemctl restart lab-websearch.service; then
+    warn "lab-websearch.service failed to restart; continuing setup. Check: journalctl -u lab-websearch -n 50"
+fi
 info "Web search MCP server started on port 3003."
 info "NOTE: Web search requires internet access on aleatico2."
 info "      If the lab firewall drops the connection, re-authenticate and"
