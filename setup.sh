@@ -141,6 +141,23 @@ for i in {1..15}; do
     fi
 done
 
+# Verify binding to 0.0.0.0:11434 (required for LAN access)
+if ss -tlnp 2>/dev/null | grep -q "0.0.0.0:11434"; then
+    info "✓ Ollama bound to 0.0.0.0:11434 (LAN/VPN accessible)"
+else
+    warn "Ollama not bound to 0.0.0.0:11434 — it's only on 127.0.0.1"
+    warn "Attempting to restart Ollama with explicit OLLAMA_HOST..."
+    sudo systemctl stop ollama
+    sleep 1
+    sudo OLLAMA_HOST=0.0.0.0:11434 systemctl start ollama
+    sleep 2
+    if ss -tlnp 2>/dev/null | grep -q "0.0.0.0:11434"; then
+        info "✓ Ollama now bound to 0.0.0.0:11434"
+    else
+        warn "Ollama binding still not working. This may be a network configuration issue."
+    fi
+fi
+
 # --------------------------------------------------------------------------- #
 # 3. Install gpu-clear script
 # --------------------------------------------------------------------------- #
@@ -332,7 +349,8 @@ sudo cp "${SCRIPT_DIR}/lab-knowledge.service"       /etc/systemd/system/
 sudo cp "${SCRIPT_DIR}/lab-knowledge-index.service" /etc/systemd/system/
 sudo cp "${SCRIPT_DIR}/lab-knowledge-index.timer"   /etc/systemd/system/
 # Patch unit files to use the interpreter selected above (conda or venv fallback).
-sudo sed -i "s|^ExecStart=/opt/conda/envs/lab-mcp/bin/python |ExecStart=${LAB_PY} |" \
+# Handle both space and backslash line continuation by replacing the entire path.
+sudo sed -i "s|ExecStart=/opt/conda/envs/lab-mcp/bin/python|ExecStart=${LAB_PY}|" \
     /etc/systemd/system/lab-knowledge.service \
     /etc/systemd/system/lab-knowledge-index.service
 sudo systemctl daemon-reload
