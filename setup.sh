@@ -291,30 +291,27 @@ info "Python packages ready."
 # Reranker is optional: lab knowledge search works fine with vector+BM25 alone.
 # If HuggingFace is unreachable (SSL inspection, firewall, etc.), skip silently
 # and gracefully degrade. First query will be slower, but will work.
+# Reranker model is optional and requires internet access without SSL inspection.
+# If your network intercepts HTTPS with a self-signed cert, we'll monkeypatch requests.
 info "Pre-downloading cross-encoder reranker model (66 MB, optional)..."
-
-if (( DISABLE_SSL_VERIFY_FOR_HF == 1 )); then
-    info "SSL verification disabled for HuggingFace Hub (per DISABLE_SSL_VERIFY_FOR_HF=1)."
-    info "Creating pip config with SSL verification bypass..."
-    sudo mkdir -p /root/.pip
-    sudo tee /root/.pip/pip.conf > /dev/null <<'PIPEOF'
-[global]
-index-url = https://pypi.org/simple/
-disable-pip-version-check = True
-no-cache-dir = True
-trusted-host = pypi.org huggingface.co files.pythonhosted.org
-PIPEOF
-fi
 
 if timeout 60 sudo env HF_HUB_DISABLE_HTTPS_VERIFY="${DISABLE_SSL_VERIFY_FOR_HF}" "${LAB_PY}" -c "
 import os
-import ssl
-import urllib3
 os.environ['HF_HUB_DISABLE_HTTPS_VERIFY'] = '${DISABLE_SSL_VERIFY_FOR_HF}'
-# Disable SSL verification at the urllib3 level (used by httpx/transformers)
-urllib3.disable_warnings()
-ssl._create_default_https_context = ssl._create_unverified_context
-# Now load the model
+
+# Monkeypatch requests to disable SSL verification
+import requests
+requests.packages.urllib3.disable_warnings()
+try:
+    from requests.packages.urllib3.util.ssl_ import create_urllib3_context
+    ctx = create_urllib3_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = __import__('ssl').CERT_NONE
+    requests.packages.urllib3.util.ssl_.create_urllib3_context = lambda *a, **k: ctx
+except Exception:
+    pass
+
+# Load the model
 from sentence_transformers import CrossEncoder
 m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
 s = m.predict([('test query', 'test document')])
@@ -322,7 +319,8 @@ print(f'  Reranker OK (score={float(s[0]):.3f})')
 "; then
     info "Reranker model pre-cached."
 else
-    warn "Reranker model download failed. Lab knowledge will use vector+BM25 only."
+    warn "Reranker model download skipped (network unreachable or SSL inspection too aggressive)."
+    warn "Lab knowledge retrieval will use vector+BM25 only (fully functional)."
 fi
 
 # Create directories
