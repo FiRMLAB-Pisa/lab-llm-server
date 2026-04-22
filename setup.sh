@@ -14,6 +14,11 @@ OLLAMA_MAX_LOADED_MODELS="2"   # keep 32B + 14B warm simultaneously
 OLLAMA_NUM_PARALLEL="10"   # serve up to 10 concurrent requests per model
 OPENHANDS_PULL_RETRIES="6"  # tolerate transient DNS/firewall hiccups
 OPENHANDS_PULL_DELAY_SECS="15"
+# Set to 1 to disable SSL certificate verification for HuggingFace Hub downloads.
+# Use this only if your lab network intercepts HTTPS with a self-signed certificate.
+# WARNING: This disables SSL verification and is a security risk. Only use in trusted
+# internal lab networks, never on machines exposed to the internet.
+DISABLE_SSL_VERIFY_FOR_HF="${DISABLE_SSL_VERIFY_FOR_HF:-0}"
 # Bind to all interfaces so every lab server and VPN user can reach Ollama
 # directly at http://aleatico2.imago7.local:11434 — no tunnel needed.
 # This is safe on a trusted internal lab network (GlobalProtect VPN).
@@ -283,15 +288,26 @@ info "Python packages ready."
 
 # Pre-download the cross-encoder reranker model so the first query isn't slow.
 # Model is 66 MB and cached to ~/.cache/huggingface/ — downloaded once, used forever.
-info "Pre-downloading cross-encoder reranker model (66 MB, one-time)..."
-sudo "${LAB_PY}" -c "
+# Reranker is optional: lab knowledge search works fine with vector+BM25 alone.
+# If HuggingFace is unreachable (SSL inspection, firewall, etc.), skip silently
+# and gracefully degrade. First query will be slower, but will work.
+info "Pre-downloading cross-encoder reranker model (66 MB, optional)..."
+RERANKER_ENV=()
+if (( DISABLE_SSL_VERIFY_FOR_HF == 1 )); then
+    info "SSL verification disabled for HuggingFace Hub (per DISABLE_SSL_VERIFY_FOR_HF)."
+    RERANKER_ENV+=("HF_HUB_DISABLE_HTTPS_VERIFY=1")
+fi
+if timeout 30 env "${RERANKER_ENV[@]}" "${LAB_PY}" -c "
 from sentence_transformers import CrossEncoder
 m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
 s = m.predict([('test query', 'test document')])
 print(f'  Reranker OK (score={float(s[0]):.3f})')
-" || warn "Reranker model download failed — check internet access on this machine." \
-        "The server will still work (falls back to vector+BM25 retrieval)."
-info "Reranker model ready."
+  " 2>/dev/null; then
+    info "Reranker model pre-cached."
+else
+    warn "Reranker model download skipped (network/SSL issue)."
+    warn "Lab knowledge will use vector+BM25 retrieval. First query may be slower."
+fi
 
 # Create directories
 sudo mkdir -p "${INSTALL_DIR}" "${KNOWLEDGE_DIR}"
