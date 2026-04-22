@@ -292,40 +292,27 @@ info "Python packages ready."
 # If HuggingFace is unreachable (SSL inspection, firewall, etc.), skip silently
 # and gracefully degrade. First query will be slower, but will work.
 # Reranker model is optional and requires internet access without SSL inspection.
-# If your network intercepts HTTPS with a self-signed cert, we'll monkeypatch httpx.
-info "Pre-downloading cross-encoder reranker model (66 MB, optional)..."
+# Lab knowledge retrieval works fine with vector+BM25 alone (graceful degradation).
+info "Reranker model pre-download (optional, skip if unreachable)..."
 
-if timeout 60 sudo env HF_HUB_DISABLE_HTTPS_VERIFY="${DISABLE_SSL_VERIFY_FOR_HF}" "${LAB_PY}" -c "
-import os
-import ssl
-os.environ['HF_HUB_DISABLE_HTTPS_VERIFY'] = '${DISABLE_SSL_VERIFY_FOR_HF}'
-
-# Monkeypatch httpx's SSL context (used by huggingface_hub)
-try:
-    import httpx
-    def _no_verify_context(*args, **kwargs):
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
-    httpx._config.DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
-    # Patch SSL context creation in httpx
-    import httpx._client
-    if hasattr(httpx._client, '_create_ssl_context'):
-        httpx._client._create_ssl_context = _no_verify_context
-except Exception as e:
-    print(f'httpx monkeypatch failed (non-critical): {e}')
-
-# Load the model
-from sentence_transformers import CrossEncoder
-m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
-s = m.predict([('test query', 'test document')])
-print(f'  Reranker OK (score={float(s[0]):.3f})')
-"; then
-    info "Reranker model pre-cached."
+RERANKER_CACHE="/root/.cache/huggingface/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2"
+if [[ -d "${RERANKER_CACHE}" ]]; then
+    info "Reranker model already cached."
 else
-    warn "Reranker model download skipped (network unreachable or SSL inspection too aggressive)."
-    warn "Lab knowledge retrieval will use vector+BM25 only (fully functional)."
+    # Try to download using curl --insecure (bypasses SSL cert verification)
+    DOWNLOAD_SCRIPT="${SCRIPT_DIR}/download-reranker.sh"
+    if [[ -x "${DOWNLOAD_SCRIPT}" ]]; then
+        info "Attempting to download reranker model (curl --insecure)..."
+        if timeout 180 sudo bash "${DOWNLOAD_SCRIPT}" 2>/dev/null; then
+            info "Reranker model downloaded."
+        else
+            warn "Reranker download failed (network/SSL issue). To add it manually:"
+            warn "  1. On a machine with internet: bash download-reranker.sh"
+            warn "  2. scp -r ~/.cache/huggingface/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2 root@aleatico2:/root/.cache/huggingface/hub/"
+        fi
+    else
+        warn "Reranker download script not found. Lab knowledge will use vector+BM25 only (fully functional)."
+    fi
 fi
 
 # Create directories
