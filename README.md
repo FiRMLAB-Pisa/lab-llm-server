@@ -36,11 +36,17 @@ sudo bash setup.sh
 
 ### Verify the server
 
+Run this quick smoke check immediately after `setup.sh` to validate core services.
+For a full PASS (including Lab Knowledge checks), run smoke test again after
+Step 4 has completed at least one successful index build.
+
 ```bash
 bash ~/lab-llm-server/smoke-test.sh
 ```
 
-Expected: all `[PASS]` lines. Failures print the exact remediation command.
+Expected: core services pass immediately after setup. Lab Knowledge-related checks
+may fail until `/opt/lab-knowledge` is populated and indexed. Failures print the
+exact remediation command.
 
 ---
 
@@ -96,6 +102,9 @@ sudo cp GE_sdk_reference.pdf        /opt/lab-knowledge/docs/
 # Trigger the first index run (watch progress):
 sudo systemctl start lab-knowledge-index.service
 journalctl -fu lab-knowledge-index
+
+# After the first index completes, run full smoke validation:
+bash ~/lab-llm-server/smoke-test.sh
 ```
 
 The knowledge base re-indexes automatically every night at 02:00.
@@ -300,7 +309,12 @@ If you need to move the LLM stack to a different server (hardware upgrade, machi
 git clone https://github.com/<lab-org>/lab-llm-server ~/lab-llm-server
 cd ~/lab-llm-server
 sudo bash setup.sh          # ~20–40 min (model downloads)
-bash smoke-test.sh          # verify all [PASS]
+
+# Quick infra check (Lab Knowledge checks may fail until index exists)
+bash smoke-test.sh
+
+# After transferring/populating /opt/lab-knowledge and rebuilding index,
+# run smoke test again for full PASS.
 ```
 
 ### 2. Update the hostname in three repos
