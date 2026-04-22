@@ -42,6 +42,7 @@ import requests
 OLLAMA_BASE  = "http://aleatico2.imago7.local:11434"
 EMBED_MODEL  = "nomic-embed-text"
 BATCH_SIZE        = 32
+CHECKPOINT_EVERY  = 100    # save partial index.pkl every N batches (~3200 chunks)
 MAX_CHUNK_CHARS   = 2000   # ~500 tokens — matches cross-encoder/ms-marco-MiniLM-L-6-v2 max_length=512
                            # chunks above this are sub-chunked so the reranker sees complete text
 MIN_CHUNK_CHARS   = 40     # skip trivial blank/whitespace-only chunks
@@ -412,64 +413,114 @@ def build_index(root: Path) -> None:
     all_chunks = deduped
     log(f"Chunks after deduplication: {len(all_chunks)}")
 
-    # Partition: reuse existing embeddings where file unchanged
-    to_embed_idx: list[int] = []   # indices into all_chunks
+    # Partition: split into reusable (unchanged) and to-embed chunks
+    to_embed_idx: list[int] = []
     for i, chunk in enumerate(all_chunks):
         cid = chunk["id"]
         if cid in old_map and existing_meta[old_map[cid]]["sig"] == chunk["sig"]:
-            pass   # will copy below
+            pass   # reused below
         else:
             to_embed_idx.append(i)
 
-    log(f"Chunks to (re-)embed: {len(to_embed_idx)} / {len(all_chunks)}")
+    n_reuse    = len(all_chunks) - len(to_embed_idx)
+    n_to_embed = len(to_embed_idx)
+    log(f"Chunks to (re-)embed: {n_to_embed} new/changed  +  {n_reuse} reused  =  {len(all_chunks)} total")
 
-    # Embed new/changed chunks
-    new_vecs: dict[int, np.ndarray] = {}   # chunk index → vector
-    for batch_start in range(0, len(to_embed_idx), BATCH_SIZE):
-        batch_idx   = to_embed_idx[batch_start : batch_start + BATCH_SIZE]
-        batch_texts = [all_chunks[i]["text"] for i in batch_idx]
-        try:
-            vecs = embed_batch(batch_texts)
-        except Exception as e:
-            log(f"Embedding error (batch starting at {batch_start}): {e}")
-            continue
-        for ci, vec in zip(batch_idx, vecs):
-            new_vecs[ci] = vec
-        if (batch_start // BATCH_SIZE) % 10 == 0:
-            log(f"  Embedded {min(batch_start + BATCH_SIZE, len(to_embed_idx))}"
-                f" / {len(to_embed_idx)} chunks")
-
-    # Assemble final arrays
+    # Pre-populate final arrays with unchanged chunks (instant — no embedding needed)
     final_embs:  list[np.ndarray] = []
     final_docs:  list[str]        = []
     final_metas: list[dict]       = []
     final_ids:   list[str]        = []
 
-    for i, chunk in enumerate(all_chunks):
-        cid = chunk["id"]
-        if i in new_vecs:
-            vec = new_vecs[i]
-        elif cid in old_map:
-            vec = existing_embs[old_map[cid]]
-        else:
-            continue   # embedding failed, skip
-        final_embs.append(vec)
-        final_docs.append(chunk["text"])
-        final_metas.append({
+    def _meta(chunk: dict) -> dict:
+        return {
             "path":       chunk["path"],
             "start_line": chunk["start_line"],
             "sig":        chunk["sig"],
             "doc_type":   chunk.get("doc_type", "unknown"),
             "priority":   chunk.get("priority", 3),
-        })
-        final_ids.append(cid)
+        }
+
+    for i, chunk in enumerate(all_chunks):
+        cid = chunk["id"]
+        if cid in old_map and existing_meta[old_map[cid]]["sig"] == chunk["sig"]:
+            final_embs.append(existing_embs[old_map[cid]])
+            final_docs.append(chunk["text"])
+            final_metas.append(_meta(chunk))
+            final_ids.append(cid)
+
+    def _save_index(label: str) -> None:
+        """Atomically write current final arrays to index.pkl."""
+        if not final_embs:
+            return
+        matrix = np.stack(final_embs, axis=0)
+        with open(tmp_file, "wb") as f:
+            pickle.dump({
+                "embeddings": matrix,
+                "documents":  final_docs,
+                "metadata":   final_metas,
+                "ids":        final_ids,
+            }, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_file.replace(index_file)
+        log(f"  [{label}] checkpoint saved — {len(final_ids)} chunks in index")
+
+    def _progress(n_done: int, n_total: int, elapsed: float) -> str:
+        pct      = n_done / n_total if n_total else 1.0
+        width    = 28
+        filled   = int(width * pct)
+        arrow    = ">" if filled < width else ""
+        bar      = "=" * filled + arrow + " " * (width - filled - len(arrow))
+        rate     = n_done / elapsed if elapsed > 0 else 0
+        eta_s    = int((n_total - n_done) / rate) if rate > 0 and n_done < n_total else 0
+        if eta_s >= 3600:
+            eta  = f"{eta_s // 3600}h{(eta_s % 3600) // 60:02d}m"
+        elif eta_s >= 60:
+            eta  = f"{eta_s // 60}m{eta_s % 60:02d}s"
+        else:
+            eta  = f"{eta_s}s"
+        return (f"  [{bar}] {pct*100:5.1f}%  "
+                f"{n_done}/{n_total} chunks  "
+                f"{rate:.0f} ch/s  ETA {eta}")
+
+    # Embed new/changed chunks — append to final arrays as we go, checkpoint periodically
+    if n_to_embed == 0:
+        log("Nothing new to embed — index is up to date")
+    else:
+        log(f"Starting embedding of {n_to_embed} chunks in batches of {BATCH_SIZE} ...")
+        t0     = time.time()
+        n_done = 0
+
+        for batch_num, batch_start in enumerate(range(0, n_to_embed, BATCH_SIZE)):
+            batch_idx   = to_embed_idx[batch_start : batch_start + BATCH_SIZE]
+            batch_texts = [all_chunks[i]["text"] for i in batch_idx]
+            try:
+                vecs = embed_batch(batch_texts)
+            except Exception as e:
+                log(f"  WARNING: embedding error (batch {batch_num}, offset {batch_start}): {e} — skipping")
+                n_done += len(batch_idx)
+                continue
+
+            for ci, vec in zip(batch_idx, vecs):
+                chunk = all_chunks[ci]
+                final_embs.append(vec)
+                final_docs.append(chunk["text"])
+                final_metas.append(_meta(chunk))
+                final_ids.append(chunk["id"])
+
+            n_done += len(batch_idx)
+            elapsed = time.time() - t0
+            log(_progress(n_done, n_to_embed, elapsed))
+
+            # Periodic checkpoint — crash-safe: next run reuses all saved chunks
+            if (batch_num + 1) % CHECKPOINT_EVERY == 0:
+                _save_index(f"batch {batch_num + 1}")
 
     if not final_embs:
         log("No chunks indexed — is /opt/lab-knowledge/ empty?")
         return
 
+    # Final atomic write
     matrix = np.stack(final_embs, axis=0)
-
     with open(tmp_file, "wb") as f:
         pickle.dump({
             "embeddings": matrix,
