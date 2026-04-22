@@ -308,7 +308,13 @@ fi
 
 if timeout 60 sudo env HF_HUB_DISABLE_HTTPS_VERIFY="${DISABLE_SSL_VERIFY_FOR_HF}" "${LAB_PY}" -c "
 import os
+import ssl
+import urllib3
 os.environ['HF_HUB_DISABLE_HTTPS_VERIFY'] = '${DISABLE_SSL_VERIFY_FOR_HF}'
+# Disable SSL verification at the urllib3 level (used by httpx/transformers)
+urllib3.disable_warnings()
+ssl._create_default_https_context = ssl._create_unverified_context
+# Now load the model
 from sentence_transformers import CrossEncoder
 m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
 s = m.predict([('test query', 'test document')])
