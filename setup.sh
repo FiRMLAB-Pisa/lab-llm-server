@@ -12,6 +12,8 @@ OLLAMA_MODELS_DIR="/var/lib/ollama/models"   # where model weights are stored
 OLLAMA_KEEP_ALIVE="30m"   # unload models after 30 min idle (frees GPU)
 OLLAMA_MAX_LOADED_MODELS="2"   # keep 32B + 14B warm simultaneously
 OLLAMA_NUM_PARALLEL="10"   # serve up to 10 concurrent requests per model
+OPENHANDS_PULL_RETRIES="6"  # tolerate transient DNS/firewall hiccups
+OPENHANDS_PULL_DELAY_SECS="15"
 # Bind to all interfaces so every lab server and VPN user can reach Ollama
 # directly at http://aleatico2.imago7.local:11434 — no tunnel needed.
 # This is safe on a trusted internal lab network (GlobalProtect VPN).
@@ -172,9 +174,39 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/openhands-compose.yml"
 [[ -f "${COMPOSE_FILE}" ]] || die "openhands-compose.yml not found at ${COMPOSE_FILE}"
 
-docker compose -f "${COMPOSE_FILE}" pull --quiet
-docker compose -f "${COMPOSE_FILE}" up -d
-info "OpenHands started — accessible at http://aleatico2.imago7.local:3000"
+# Heads-up for tight disks: OpenHands images plus writable layers are several GB.
+FREE_GB=$(df -BG /var/lib/docker 2>/dev/null | awk 'NR==2{gsub("G","",$4); print $4}')
+if [[ -n "${FREE_GB:-}" ]] && (( FREE_GB < 25 )); then
+    warn "Only ${FREE_GB}G free on /var/lib/docker. OpenHands image pulls may fail."
+    warn "If needed, clean old Docker cache: sudo docker system prune -af"
+fi
+
+pull_ok=0
+for ((i=1; i<=OPENHANDS_PULL_RETRIES; i++)); do
+    info "Pulling OpenHands images (attempt ${i}/${OPENHANDS_PULL_RETRIES})..."
+    if docker compose -f "${COMPOSE_FILE}" pull --quiet; then
+        pull_ok=1
+        break
+    fi
+    if (( i < OPENHANDS_PULL_RETRIES )); then
+        warn "OpenHands pull failed (attempt ${i}). Retrying in ${OPENHANDS_PULL_DELAY_SECS}s..."
+        sleep "${OPENHANDS_PULL_DELAY_SECS}"
+    fi
+done
+
+if (( pull_ok == 1 )); then
+    if docker compose -f "${COMPOSE_FILE}" up -d; then
+        info "OpenHands started — accessible at http://aleatico2.imago7.local:3000"
+    else
+        warn "OpenHands container failed to start. Continuing setup of remaining services."
+        warn "Check logs: docker compose -f ${COMPOSE_FILE} logs --tail=100"
+    fi
+else
+    warn "OpenHands image pull failed after ${OPENHANDS_PULL_RETRIES} attempts"
+    warn "(often DNS/firewall/registry issue)."
+    warn "Continuing setup of remaining services. Retry later with:"
+    warn "  docker compose -f ${COMPOSE_FILE} pull && docker compose -f ${COMPOSE_FILE} up -d"
+fi
 
 # --------------------------------------------------------------------------- #
 # 6. Install lab knowledge MCP service
