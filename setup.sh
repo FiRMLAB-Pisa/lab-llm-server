@@ -148,6 +148,34 @@ info "Installing lab knowledge MCP service..."
 INSTALL_DIR="/opt/lab-server"
 KNOWLEDGE_DIR="/opt/lab-knowledge"
 
+# Ensure Python packages are up to date in the lab-mcp conda env
+LAB_PY="/opt/conda/envs/lab-mcp/bin/python"
+if [[ ! -x "${LAB_PY}" ]]; then
+    info "lab-mcp conda env not found — creating it..."
+    if command -v mamba &>/dev/null; then
+        mamba create -n lab-mcp python=3.11 -y
+    elif command -v conda &>/dev/null; then
+        conda create -n lab-mcp python=3.11 -y
+    else
+        die "conda/mamba not found. Install Miniforge first, then re-run setup.sh."
+    fi
+fi
+info "Installing/upgrading Python packages in lab-mcp env..."
+"${LAB_PY}" -m pip install -q --upgrade "mcp[cli]" numpy requests "rank-bm25" "sentence-transformers"
+info "Python packages ready."
+
+# Pre-download the cross-encoder reranker model so the first query isn't slow.
+# Model is 66 MB and cached to ~/.cache/huggingface/ — downloaded once, used forever.
+info "Pre-downloading cross-encoder reranker model (66 MB, one-time)..."
+"${LAB_PY}" -c "
+from sentence_transformers import CrossEncoder
+m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+s = m.predict([('test query', 'test document')])
+print(f'  Reranker OK (score={float(s[0]):.3f})')
+" || warn "Reranker model download failed — check internet access on this machine." \
+        "The server will still work (falls back to vector+BM25 retrieval)."
+info "Reranker model ready."
+
 # Create directories
 sudo mkdir -p "${INSTALL_DIR}" "${KNOWLEDGE_DIR}"
 sudo chmod 755 "${KNOWLEDGE_DIR}"

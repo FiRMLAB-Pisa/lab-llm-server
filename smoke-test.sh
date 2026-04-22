@@ -157,6 +157,51 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
+section "Lab Knowledge MCP (port 3001)"
+# --------------------------------------------------------------------------- #
+
+LAB_PY="/opt/conda/envs/lab-mcp/bin/python"
+
+if systemctl is-active --quiet lab-knowledge; then
+    pass "lab-knowledge.service is active"
+else
+    fail "lab-knowledge.service is NOT active — run: sudo systemctl start lab-knowledge"
+fi
+
+if curl -sf --max-time 3 'http://127.0.0.1:3001/sse' > /dev/null 2>&1 || \
+   curl -sf --max-time 3 'http://127.0.0.1:3001/' > /dev/null 2>&1; then
+    pass "Lab knowledge MCP SSE endpoint reachable at :3001"
+else
+    fail "Lab knowledge MCP not reachable at :3001 — check: journalctl -fu lab-knowledge"
+fi
+
+# Check Python packages in the lab-mcp env
+if [[ -x "${LAB_PY}" ]]; then
+    for pkg in "rank_bm25" "sentence_transformers" "mcp" "numpy" "requests"; do
+        if "${LAB_PY}" -c "import ${pkg}" 2>/dev/null; then
+            pass "Python package available: ${pkg}"
+        else
+            fail "Python package MISSING in lab-mcp env: ${pkg} — run: ${LAB_PY} -m pip install ${pkg//_/-}"
+        fi
+    done
+
+    # Functional reranker check: actually score a pair
+    RERANKER_OK=$("${LAB_PY}" -c "
+from sentence_transformers import CrossEncoder
+m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+s = m.predict([('T1 relaxation', 'T1 is the longitudinal relaxation time constant')])
+print('ok' if float(s[0]) > -10 else 'bad')
+" 2>/dev/null)
+    if [[ "${RERANKER_OK}" == "ok" ]]; then
+        pass "Cross-encoder reranker functional (ms-marco-MiniLM-L-6-v2)"
+    else
+        fail "Cross-encoder reranker not working — check model cache or sentence-transformers install"
+    fi
+else
+    fail "lab-mcp Python env not found at ${LAB_PY} — run setup.sh"
+fi
+
+# --------------------------------------------------------------------------- #
 section "GPU"
 # --------------------------------------------------------------------------- #
 

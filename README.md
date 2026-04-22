@@ -101,6 +101,28 @@ journalctl -fu lab-knowledge-index
 The knowledge base re-indexes automatically every night at 02:00.
 Roo Code calls `search_knowledge()` automatically — no user action needed.
 
+### Keeping the knowledge base clean
+
+The indexer automatically skips common junk directories (`.git`, `build`,
+`__pycache__`, etc.). It also skips these directories by name anywhere in the
+tree — so the convention for retiring outdated material is simple:
+
+```bash
+# Move outdated protocols or old SDK versions out of the active index:
+sudo mv /opt/lab-knowledge/docs/protocol_v1.md \
+        /opt/lab-knowledge/archive/protocol_v1.md
+
+# These directory names are all excluded automatically:
+#   archive/  archived/  deprecated/  old/  backup/  legacy/  obsolete/
+```
+
+No re-configuration needed — just move the file and the next nightly index
+run will drop it from retrieval.
+
+**Practical rule:** if two versions of a protocol exist, keep the current one
+in `docs/` and move the old one to `archive/`. The AI will only see the current
+version.
+
 ### PDF manuals
 
 The indexer already handles PDFs — it extracts text with `pdftotext` (poppler)
@@ -117,7 +139,6 @@ technical documentation.
 > C/C++ header files from the SDK in `/opt/lab-knowledge/repos/epic-sdk/`.
 > The indexer will embed both. Headers give precise API coverage; the PDFs add
 > narrative context (protocols, timing diagrams, conceptual explanations).
-
 ## GPU Sharing and Scientific Jobs
 
 If you need to run a GPU-intensive job (PyTorch, TensorFlow, CUDA):
@@ -135,13 +156,16 @@ If you need to run a GPU-intensive job (PyTorch, TensorFlow, CUDA):
 ## Models and Modes
 
 | Roo Code Mode | Model | VRAM | Purpose |
-|---|---|---|---|
+|---|---|---|
+---|
+| **Orchestrator** | `deepseek-r1:32b` | ~20 GB | Meta-agent: breaks complex tasks into subtasks, delegates automatically |
 | Architect | `deepseek-r1:32b` | ~20 GB | Planning, understanding unfamiliar code |
 | Code | `qwen2.5-coder:14b` | ~9 GB | File edits, terminal commands, tool use |
 | Ask | `deepseek-r1:7b` | ~5 GB | Quick Q&A, explanations |
 | Debug | `qwen2.5-coder:14b` | ~9 GB | Tracing errors, reading tracebacks |
 | Autocomplete | `starcoder2:3b` | ~2 GB | Ghost-text tab completion (Continue.dev) |
 
+Orchestrator and Architect share the 32B model — only one copy is loaded.
 32B + 14B loaded simultaneously = ~29 GB VRAM, leaving ~17 GB for KV cache.
 `nomic-embed-text` and `starcoder2:3b` are small — minimal VRAM impact.
 

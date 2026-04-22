@@ -23,9 +23,11 @@ Supported file types (auto-discovered, no config needed):
 """
 
 import argparse
+import hashlib
 import json
 import os
 import pickle
+import re
 import subprocess
 import sys
 import time
@@ -39,9 +41,12 @@ import requests
 # --------------------------------------------------------------------------- #
 OLLAMA_BASE  = "http://aleatico2.imago7.local:11434"
 EMBED_MODEL  = "nomic-embed-text"
-BATCH_SIZE   = 32
-CHUNK_LINES  = 80     # slightly larger chunks than per-project (docs are verbose)
-OVERLAP_LINES = 15
+BATCH_SIZE        = 32
+MAX_CHUNK_CHARS   = 2000   # ~500 tokens — matches cross-encoder/ms-marco-MiniLM-L-6-v2 max_length=512
+                           # chunks above this are sub-chunked so the reranker sees complete text
+MIN_CHUNK_CHARS   = 40     # skip trivial blank/whitespace-only chunks
+_FALLBACK_LINES   = 40     # fixed-line chunk size used when no semantic boundaries found
+_FALLBACK_OVERLAP = 8      # overlap lines for fixed-line fallback
 
 INCLUDE_SUFFIXES = {
     ".py", ".m", ".c", ".h", ".cpp", ".cu", ".cuh", ".jl",
@@ -55,6 +60,9 @@ EXCLUDE_DIRS = {
     ".git", ".index", ".mypy_cache", "__pycache__",
     ".venv", "venv", "node_modules", "build", "dist",
     ".ipynb_checkpoints", ".tox", "*.egg-info",
+    # Stale/archived content — move outdated material here to exclude from index
+    "archive", "archived", "deprecated", "old", "backup", "backups",
+    "legacy", "unused", "obsolete", "tmp", "temp",
 }
 
 EXCLUDE_SUFFIXES = {
@@ -141,25 +149,208 @@ def read_file(path: Path) -> str | None:
         return None
 
 
-def chunk_text(text: str, path: Path, root: Path, sig: str) -> list[dict]:
-    lines = text.splitlines(keepends=True)
-    rel   = path.relative_to(root)
-    chunks = []
-    i = 0
-    while i < len(lines):
-        batch = lines[i : i + CHUNK_LINES]
-        body  = "".join(batch).strip()
-        if body:
-            header = f"# Source: {rel}  (lines {i+1}–{i+len(batch)})\n"
-            chunks.append({
-                "id":         f"{rel}::{i}",
-                "text":       header + body,
-                "path":       str(rel),
-                "start_line": i + 1,
-                "sig":        sig,
-            })
-        i += CHUNK_LINES - OVERLAP_LINES
+# --------------------------------------------------------------------------- #
+# Semantic chunkers
+# --------------------------------------------------------------------------- #
+_PY_BOUNDARY   = re.compile(r'^(def |class |async def )')
+_M_BOUNDARY    = re.compile(r'^function\s+\w')   # MATLAB / Julia
+_C_CLOSE       = re.compile(r'^\}\s*$')           # lone } = end of C/C++ block
+_MD_HEADING    = re.compile(r'^#{1,3}\s')
+_RST_UNDERLINE = re.compile(r'^[=\-~^`\'"#*+]{3,}\s*$')
+
+
+def _text_hash(text: str) -> str:
+    """Stable SHA-256 of normalised text — used for deduplication."""
+    normalised = re.sub(r'\s+', ' ', text.strip().lower())
+    return hashlib.sha256(normalised.encode()).hexdigest()
+
+
+def doc_type_for(path: Path) -> str:
+    suf = path.suffix.lower()
+    if suf in {'.py', '.m', '.c', '.h', '.cpp', '.cc', '.cu', '.cuh', '.jl'}:
+        return 'code'
+    if suf in {'.md', '.rst', '.txt'}:
+        return 'docs'
+    if suf == '.pdf':
+        return 'pdf'
+    if suf == '.ipynb':
+        return 'notebook'
+    return 'config'
+
+
+def priority_for(path: Path, root: Path) -> int:
+    rel = str(path.relative_to(root)).lower()
+    if any(p in rel for p in ('protocol', 'manual', 'spec', 'reference')):
+        return 10
+    if any(p in rel for p in ('paper', 'publi', 'article', 'preprint')):
+        return 8
+    if path.suffix.lower() in {'.py', '.m', '.c', '.h', '.cpp', '.cu', '.cuh', '.jl'}:
+        return 5
+    return 3
+
+
+def _section_starts(lines: list[str], suf: str) -> list[int]:
+    """Return sorted line indices where a new top-level logical section begins."""
+    starts = [0]
+    if suf == '.py':
+        for i, ln in enumerate(lines):
+            if _PY_BOUNDARY.match(ln):
+                # Walk backwards to include leading decorator lines
+                j = i - 1
+                while j >= 0 and lines[j].startswith('@'):
+                    j -= 1
+                starts.append(j + 1)
+    elif suf in ('.m', '.jl'):
+        for i, ln in enumerate(lines):
+            if _M_BOUNDARY.match(ln):
+                starts.append(i)
+    elif suf in ('.c', '.h', '.cpp', '.cc', '.cu', '.cuh'):
+        for i, ln in enumerate(lines):
+            # Lone closing brace = end of top-level block; next chunk starts after it
+            if _C_CLOSE.match(ln) and i + 1 < len(lines):
+                starts.append(i + 1)
+    elif suf == '.md':
+        for i, ln in enumerate(lines):
+            if _MD_HEADING.match(ln):
+                starts.append(i)
+    elif suf == '.rst':
+        for i, ln in enumerate(lines):
+            # RST underline follows the heading title
+            if _RST_UNDERLINE.match(ln) and i > 0 and lines[i - 1].strip():
+                starts.append(max(0, i - 1))
+    return sorted(set(starts))
+
+
+def _make_chunk(lines: list[str], lo: int, hi: int,
+                rel: Path, sig: str, doc_type: str, priority: int) -> dict:
+    body   = ''.join(lines[lo:hi]).strip()
+    header = f"# Source: {rel}  (lines {lo + 1}\u2013{hi})\n"
+    return {
+        'id':         f'{rel}::{lo}',
+        'text':       header + body,
+        'path':       str(rel),
+        'start_line': lo + 1,
+        'sig':        sig,
+        'doc_type':   doc_type,
+        'priority':   priority,
+    }
+
+
+def _slice_sections(lines: list[str], starts: list[int],
+                    path: Path, root: Path, sig: str) -> list[dict]:
+    """Slice lines at semantic section boundaries; sub-chunk oversized sections."""
+    rel      = path.relative_to(root)
+    doc_type = doc_type_for(path)
+    priority = priority_for(path, root)
+    chunks: list[dict] = []
+    boundaries = starts + [len(lines)]
+
+    for k in range(len(boundaries) - 1):
+        lo, hi = boundaries[k], boundaries[k + 1]
+        body = ''.join(lines[lo:hi]).strip()
+        if not body or len(body) < MIN_CHUNK_CHARS:
+            continue
+
+        if len(body) <= MAX_CHUNK_CHARS:
+            chunks.append(_make_chunk(lines, lo, hi, rel, sig, doc_type, priority))
+        else:
+            # Section too large \u2014 sub-chunk with fixed lines + overlap
+            i = lo
+            while i < hi:
+                sub_hi  = min(i + _FALLBACK_LINES, hi)
+                sub_body = ''.join(lines[i:sub_hi]).strip()
+                if sub_body and len(sub_body) >= MIN_CHUNK_CHARS:
+                    chunks.append(_make_chunk(lines, i, sub_hi, rel, sig, doc_type, priority))
+                i += _FALLBACK_LINES - _FALLBACK_OVERLAP
     return chunks
+
+
+def _chunk_paragraphs(text: str, path: Path, root: Path, sig: str) -> list[dict]:
+    """Split plain text at blank lines; group paragraphs into chunks \u2264 MAX_CHUNK_CHARS."""
+    rel      = path.relative_to(root)
+    doc_type = doc_type_for(path)
+    priority = priority_for(path, root)
+    paras    = re.split(r'\n\s*\n', text)
+    chunks: list[dict] = []
+    current_parts: list[str] = []
+    current_len   = 0
+    current_start = 1
+    line_offset   = 1
+
+    def _flush() -> None:
+        if not current_parts:
+            return
+        body = '\n\n'.join(current_parts)
+        if body.strip() and len(body) >= MIN_CHUNK_CHARS:
+            header = f'# Source: {rel}  (approx. line {current_start})\n'
+            chunks.append({
+                'id':         f'{rel}::{current_start}',
+                'text':       header + body,
+                'path':       str(rel),
+                'start_line': current_start,
+                'sig':        sig,
+                'doc_type':   doc_type,
+                'priority':   priority,
+            })
+
+    for para in paras:
+        para    = para.strip()
+        n_lines = para.count('\n') + 1 if para else 0
+        if not para:
+            line_offset += 1
+            continue
+        if current_parts and current_len + len(para) + 2 > MAX_CHUNK_CHARS:
+            _flush()
+            current_parts = [para]
+            current_len   = len(para)
+            current_start = line_offset
+        else:
+            if not current_parts:
+                current_start = line_offset
+            current_parts.append(para)
+            current_len += len(para) + 2
+        line_offset += n_lines + 1
+
+    _flush()
+    return chunks
+
+
+def chunk_file(text: str, path: Path, root: Path, sig: str) -> list[dict]:
+    """Semantically chunk a source file into indexable pieces.
+
+    Dispatch strategy:
+      .txt            \u2192 paragraph grouping
+      .py             \u2192 top-level def/class boundaries (with decorator walk-back)
+      .m / .jl        \u2192 function keyword boundaries
+      .c/.cpp/.h etc. \u2192 closing-brace boundaries
+      .md             \u2192 heading (h1\u2013h3) boundaries
+      .rst            \u2192 RST underline-detected heading boundaries
+      everything else \u2192 fixed-line fallback (_FALLBACK_LINES)
+    """
+    suf = path.suffix.lower()
+    rel      = path.relative_to(root)
+    doc_type = doc_type_for(path)
+    priority = priority_for(path, root)
+
+    if suf == '.txt':
+        return _chunk_paragraphs(text, path, root, sig)
+
+    lines  = text.splitlines(keepends=True)
+    starts = _section_starts(lines, suf)
+
+    # If no semantic boundaries found, fall through to fixed-line chunking
+    if len(starts) <= 1:
+        chunks: list[dict] = []
+        i = 0
+        while i < len(lines):
+            hi   = min(i + _FALLBACK_LINES, len(lines))
+            body = ''.join(lines[i:hi]).strip()
+            if body and len(body) >= MIN_CHUNK_CHARS:
+                chunks.append(_make_chunk(lines, i, hi, rel, sig, doc_type, priority))
+            i += _FALLBACK_LINES - _FALLBACK_OVERLAP
+        return chunks
+
+    return _slice_sections(lines, starts, path, root, sig)
 
 
 # --------------------------------------------------------------------------- #
@@ -200,11 +391,26 @@ def build_index(root: Path) -> None:
         if not text or not text.strip():
             continue
         sig    = file_sig(fpath)
-        chunks = chunk_text(text, fpath, root, sig)
+        chunks = chunk_file(text, fpath, root, sig)
         all_chunks.extend(chunks)
         n_files += 1
 
-    log(f"Found {n_files} files → {len(all_chunks)} chunks")
+    log(f"Found {n_files} files \u2192 {len(all_chunks)} raw chunks")
+
+    # Deduplicate: remove chunks whose normalised text is identical
+    # (catches copied repos, backup files, generated docs, etc.)
+    seen_hashes: set[str] = set()
+    deduped: list[dict]   = []
+    for chunk in all_chunks:
+        h = _text_hash(chunk['text'])
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            deduped.append(chunk)
+    n_dupes = len(all_chunks) - len(deduped)
+    if n_dupes:
+        log(f"Deduplication: removed {n_dupes} duplicate chunk(s)")
+    all_chunks = deduped
+    log(f"Chunks after deduplication: {len(all_chunks)}")
 
     # Partition: reuse existing embeddings where file unchanged
     to_embed_idx: list[int] = []   # indices into all_chunks
@@ -249,8 +455,13 @@ def build_index(root: Path) -> None:
             continue   # embedding failed, skip
         final_embs.append(vec)
         final_docs.append(chunk["text"])
-        final_metas.append({"path": chunk["path"], "start_line": chunk["start_line"],
-                             "sig": chunk["sig"]})
+        final_metas.append({
+            "path":       chunk["path"],
+            "start_line": chunk["start_line"],
+            "sig":        chunk["sig"],
+            "doc_type":   chunk.get("doc_type", "unknown"),
+            "priority":   chunk.get("priority", 3),
+        })
         final_ids.append(cid)
 
     if not final_embs:
