@@ -301,17 +301,19 @@ if [[ -d "${RERANKER_CACHE}" ]]; then
 else
     # Try to download using curl --insecure (bypasses SSL cert verification)
     DOWNLOAD_SCRIPT="${SCRIPT_DIR}/download-reranker.sh"
-    if [[ -x "${DOWNLOAD_SCRIPT}" ]]; then
-        info "Attempting to download reranker model (curl --insecure)..."
-        if timeout 180 sudo bash "${DOWNLOAD_SCRIPT}" 2>/dev/null; then
-            info "Reranker model downloaded."
+    if [[ -f "${DOWNLOAD_SCRIPT}" ]]; then
+        info "Attempting to download reranker model using curl --insecure..."
+        # Run as root so the cache ends up in /root/.cache where sentence_transformers expects it
+        if timeout 180 sudo bash "${DOWNLOAD_SCRIPT}"; then
+            info "Reranker model downloaded successfully."
         else
-            warn "Reranker download failed (network/SSL issue). To add it manually:"
-            warn "  1. On a machine with internet: bash download-reranker.sh"
-            warn "  2. scp -r ~/.cache/huggingface/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2 root@aleatico2:/root/.cache/huggingface/hub/"
+            warn "Reranker download failed. Lab knowledge will use vector+BM25 only."
+            warn "To add it manually:"
+            warn "  1. scp -r ~/.cache/huggingface/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2 root@aleatico2:/root/.cache/huggingface/hub/"
         fi
     else
-        warn "Reranker download script not found. Lab knowledge will use vector+BM25 only (fully functional)."
+        warn "Reranker download script not found at ${DOWNLOAD_SCRIPT}."
+        warn "Lab knowledge will use vector+BM25 only (fully functional)."
     fi
 fi
 
