@@ -311,7 +311,7 @@ if timeout 60 env "${RERANKER_ENV[@]}" sudo "${LAB_PY}" -c "
 import os
 os.environ['HF_HUB_DISABLE_HTTPS_VERIFY'] = '${DISABLE_SSL_VERIFY_FOR_HF}'
 from sentence_transformers import CrossEncoder
-m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
 s = m.predict([('test query', 'test document')])
 print(f'  Reranker OK (score={float(s[0]):.3f})')
   " 2>/dev/null; then
