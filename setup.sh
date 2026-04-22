@@ -292,12 +292,24 @@ info "Python packages ready."
 # If HuggingFace is unreachable (SSL inspection, firewall, etc.), skip silently
 # and gracefully degrade. First query will be slower, but will work.
 info "Pre-downloading cross-encoder reranker model (66 MB, optional)..."
-RERANKER_ENV=()
+
 if (( DISABLE_SSL_VERIFY_FOR_HF == 1 )); then
-    info "SSL verification disabled for HuggingFace Hub (per DISABLE_SSL_VERIFY_FOR_HF)."
-    RERANKER_ENV+=("HF_HUB_DISABLE_HTTPS_VERIFY=1")
+    info "SSL verification disabled for HuggingFace Hub (per DISABLE_SSL_VERIFY_FOR_HF=1)."
+    info "Creating pip config with SSL verification bypass..."
+    sudo mkdir -p /root/.pip
+    sudo tee /root/.pip/pip.conf > /dev/null <<'PIPEOF'
+[global]
+index-url = https://pypi.org/simple/
+disable-pip-version-check = True
+no-cache-dir = True
+trusted-host = pypi.org huggingface.co files.pythonhosted.org
+PIPEOF
 fi
-if timeout 30 env "${RERANKER_ENV[@]}" "${LAB_PY}" -c "
+
+RERANKER_ENV=("HF_HUB_DISABLE_HTTPS_VERIFY=${DISABLE_SSL_VERIFY_FOR_HF}")
+if timeout 60 env "${RERANKER_ENV[@]}" sudo "${LAB_PY}" -c "
+import os
+os.environ['HF_HUB_DISABLE_HTTPS_VERIFY'] = '${DISABLE_SSL_VERIFY_FOR_HF}'
 from sentence_transformers import CrossEncoder
 m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
 s = m.predict([('test query', 'test document')])
