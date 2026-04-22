@@ -306,19 +306,17 @@ trusted-host = pypi.org huggingface.co files.pythonhosted.org
 PIPEOF
 fi
 
-RERANKER_ENV=("HF_HUB_DISABLE_HTTPS_VERIFY=${DISABLE_SSL_VERIFY_FOR_HF}")
-if timeout 60 env "${RERANKER_ENV[@]}" sudo "${LAB_PY}" -c "
+if timeout 60 sudo env HF_HUB_DISABLE_HTTPS_VERIFY="${DISABLE_SSL_VERIFY_FOR_HF}" "${LAB_PY}" -c "
 import os
 os.environ['HF_HUB_DISABLE_HTTPS_VERIFY'] = '${DISABLE_SSL_VERIFY_FOR_HF}'
 from sentence_transformers import CrossEncoder
 m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
 s = m.predict([('test query', 'test document')])
 print(f'  Reranker OK (score={float(s[0]):.3f})')
-  " 2>/dev/null; then
+"; then
     info "Reranker model pre-cached."
 else
-    warn "Reranker model download skipped (network/SSL issue)."
-    warn "Lab knowledge will use vector+BM25 retrieval. First query may be slower."
+    warn "Reranker model download failed. Lab knowledge will use vector+BM25 only."
 fi
 
 # Create directories
