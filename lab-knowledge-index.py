@@ -95,6 +95,25 @@ def embed_batch(texts: list[str]) -> np.ndarray:
     return vecs / norms
 
 
+def embed_batch_resilient(texts: list[str]) -> tuple[list[tuple[int, np.ndarray]], list[tuple[int, str]]]:
+    """Embed a batch, falling back to per-chunk retries on batch failure."""
+    try:
+        vecs = embed_batch(texts)
+        return list(enumerate(vecs)), []
+    except Exception as exc:
+        successes: list[tuple[int, np.ndarray]] = []
+        failures: list[tuple[int, str]] = []
+        log(f"  WARNING: batch embedding failed for {len(texts)} chunk(s): {exc} — retrying individually")
+        for offset, text in enumerate(texts):
+            try:
+                vec = embed_batch([text])[0]
+            except Exception as item_exc:
+                failures.append((offset, str(item_exc)))
+            else:
+                successes.append((offset, vec))
+        return successes, failures
+
+
 def file_sig(path: Path) -> str:
     st = path.stat()
     return f"{st.st_mtime:.3f}:{st.st_size}"
@@ -489,23 +508,31 @@ def build_index(root: Path) -> None:
         log(f"Starting embedding of {n_to_embed} chunks in batches of {BATCH_SIZE} ...")
         t0     = time.time()
         n_done = 0
+        n_failed = 0
 
         for batch_num, batch_start in enumerate(range(0, n_to_embed, BATCH_SIZE)):
             batch_idx   = to_embed_idx[batch_start : batch_start + BATCH_SIZE]
             batch_texts = [all_chunks[i]["text"] for i in batch_idx]
-            try:
-                vecs = embed_batch(batch_texts)
-            except Exception as e:
-                log(f"  WARNING: embedding error (batch {batch_num}, offset {batch_start}): {e} — skipping")
-                n_done += len(batch_idx)
-                continue
+            successes, failures = embed_batch_resilient(batch_texts)
 
-            for ci, vec in zip(batch_idx, vecs):
+            for offset, vec in successes:
+                ci = batch_idx[offset]
                 chunk = all_chunks[ci]
                 final_embs.append(vec)
                 final_docs.append(chunk["text"])
                 final_metas.append(_meta(chunk))
                 final_ids.append(chunk["id"])
+
+            if failures:
+                n_failed += len(failures)
+                for offset, err in failures[:3]:
+                    ci = batch_idx[offset]
+                    log(
+                        f"  WARNING: failed chunk {all_chunks[ci]['path']}"
+                        f":{all_chunks[ci]['start_line']}: {err}"
+                    )
+                if len(failures) > 3:
+                    log(f"  WARNING: {len(failures) - 3} additional chunk failure(s) suppressed for this batch")
 
             n_done += len(batch_idx)
             elapsed = time.time() - t0
@@ -514,6 +541,9 @@ def build_index(root: Path) -> None:
             # Periodic checkpoint — crash-safe: next run reuses all saved chunks
             if (batch_num + 1) % CHECKPOINT_EVERY == 0:
                 _save_index(f"batch {batch_num + 1}")
+
+        if n_failed:
+            log(f"Completed with {n_failed} chunk failure(s); rerun after fixing upstream embed errors to backfill them")
 
     if not final_embs:
         log("No chunks indexed — is /opt/lab-knowledge/ empty?")
