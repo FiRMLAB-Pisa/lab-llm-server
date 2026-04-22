@@ -21,7 +21,7 @@
 
 services:
   openhands:
-    image: docker.all-hands.dev/all-hands-ai/openhands:latest
+    image: docker.openhands.dev/openhands/openhands:1.6
     container_name: openhands
     restart: unless-stopped
 
@@ -34,7 +34,7 @@ services:
       # Docker socket so OpenHands can spin up per-task sandbox containers
       - /var/run/docker.sock:/var/run/docker.sock
       # Persistent storage for sessions, settings, history
-      - openhands-data:/app/openhands/storage
+      - openhands-data:/.openhands
       # Lab user home directories (includes ~/M symlinks to shared storage).
       # Mount read-write so OpenHands can edit files and write results.
       - /home:/home:rw
@@ -47,9 +47,11 @@ services:
       - LLM_BASE_URL=http://host.docker.internal:11434
       - LLM_API_KEY=ollama           # required field, value is ignored by Ollama
 
-      # ----- Sandbox runtime -----
-      # The sandbox container that actually runs the agent's shell commands.
-      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:latest
+      # ----- Agent sandbox images -----
+      # Hosted on GHCR; keeps setup working when docker.all-hands.dev is blocked.
+      - AGENT_SERVER_IMAGE_REPOSITORY=ghcr.io/openhands/agent-server
+      - AGENT_SERVER_IMAGE_TAG=1.15.0-python
+      - LOG_ALL_EVENTS=true
 
       # ----- Optional: default workspace -----
       # Users can override this per-session in the UI.

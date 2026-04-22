@@ -144,9 +144,13 @@ if [[ -d "${PRELOAD_MODELS}/blobs" ]]; then
 fi
 
 for model in "${MODELS[@]}"; do
-    info "Pulling ${model}..."
-    ollama pull "${model}"
-    info "Done: ${model}"
+    if ollama list | awk 'NR>1 {print $1}' | grep -Fxq "${model}"; then
+        info "Already present locally, skipping pull: ${model}"
+    else
+        info "Pulling ${model}..."
+        ollama pull "${model}"
+        info "Done: ${model}"
+    fi
 done
 
 # --------------------------------------------------------------------------- #
@@ -214,27 +218,40 @@ fi
 info "Installing lab knowledge MCP service..."
 INSTALL_DIR="/opt/lab-server"
 KNOWLEDGE_DIR="/opt/lab-knowledge"
+LAB_CONDA_PY="/opt/conda/envs/lab-mcp/bin/python"
+LAB_VENV_DIR="${INSTALL_DIR}/.venv-lab-mcp"
 
-# Ensure Python packages are up to date in the lab-mcp conda env
-LAB_PY="/opt/conda/envs/lab-mcp/bin/python"
+# Ensure Python packages are available for lab services.
+# Prefer the shared conda env when present; otherwise fall back to a local venv.
+LAB_PY="${LAB_CONDA_PY}"
 if [[ ! -x "${LAB_PY}" ]]; then
-    info "lab-mcp conda env not found — creating it..."
+    info "lab-mcp conda env not found. Trying to create it..."
     if command -v mamba &>/dev/null; then
         mamba create -n lab-mcp python=3.11 -y
     elif command -v conda &>/dev/null; then
         conda create -n lab-mcp python=3.11 -y
     else
-        die "conda/mamba not found. Install Miniforge first, then re-run setup.sh."
+        info "conda/mamba not found — using system python venv fallback."
+        require_cmd python3
+        sudo mkdir -p "${INSTALL_DIR}"
+        if [[ ! -x "${LAB_VENV_DIR}/bin/python" ]]; then
+            sudo python3 -m venv "${LAB_VENV_DIR}"
+        fi
+        sudo "${LAB_VENV_DIR}/bin/python" -m pip install -q --upgrade pip
+        LAB_PY="${LAB_VENV_DIR}/bin/python"
     fi
 fi
+if [[ ! -x "${LAB_PY}" ]]; then
+    LAB_PY="${LAB_CONDA_PY}"
+fi
 info "Installing/upgrading Python packages in lab-mcp env..."
-"${LAB_PY}" -m pip install -q --upgrade "mcp[cli]" numpy requests "rank-bm25" "sentence-transformers"
+sudo "${LAB_PY}" -m pip install -q --upgrade "mcp[cli]" numpy requests "rank-bm25" "sentence-transformers"
 info "Python packages ready."
 
 # Pre-download the cross-encoder reranker model so the first query isn't slow.
 # Model is 66 MB and cached to ~/.cache/huggingface/ — downloaded once, used forever.
 info "Pre-downloading cross-encoder reranker model (66 MB, one-time)..."
-"${LAB_PY}" -c "
+sudo "${LAB_PY}" -c "
 from sentence_transformers import CrossEncoder
 m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
 s = m.predict([('test query', 'test document')])
@@ -257,6 +274,10 @@ sudo chmod 755 "${INSTALL_DIR}/lab-knowledge-index.py" \
 sudo cp "${SCRIPT_DIR}/lab-knowledge.service"       /etc/systemd/system/
 sudo cp "${SCRIPT_DIR}/lab-knowledge-index.service" /etc/systemd/system/
 sudo cp "${SCRIPT_DIR}/lab-knowledge-index.timer"   /etc/systemd/system/
+# Patch unit files to use the interpreter selected above (conda or venv fallback).
+sudo sed -i "s|^ExecStart=/opt/conda/envs/lab-mcp/bin/python |ExecStart=${LAB_PY} |" \
+    /etc/systemd/system/lab-knowledge.service \
+    /etc/systemd/system/lab-knowledge-index.service
 sudo systemctl daemon-reload
 sudo systemctl enable lab-knowledge.service lab-knowledge-index.timer
 sudo systemctl start  lab-knowledge.service
