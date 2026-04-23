@@ -68,6 +68,7 @@ PRIORITY_ALPHA  = 0.10    # weight of priority boost in RRF score  (0 = disabled
 _embeddings:  np.ndarray | None = None
 _documents:   list[str]         = []
 _metadata:    list[dict]        = []
+
 _bm25                           = None   # BM25Okapi instance, or None
 _reranker                       = None   # CrossEncoder, loaded lazily on first query
 _reranker_lock = threading.Lock()
@@ -75,7 +76,7 @@ _index_mtime: float             = 0.0
 _lock         = threading.RLock()
 _ready        = threading.Event()
 
-mcp = FastMCP("lab-knowledge", transport="sse", port=DEFAULT_PORT, host="0.0.0.0")
+mcp = FastMCP("lab-knowledge")
 
 
 def _tokenize(text: str) -> list[str]:
@@ -314,7 +315,7 @@ def main() -> None:
             f"[lab-knowledge] WARNING: FastMCP in this environment uses constructor-bound port; "
             f"requested --port={args.port}, using {DEFAULT_PORT}.\n"
         )
-    mcp.run()
+    mcp.run(transport="sse", port=DEFAULT_PORT, host="0.0.0.0")
 
 
 if __name__ == "__main__":
