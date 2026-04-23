@@ -17,6 +17,7 @@ Usage (managed by systemd — do not run manually in production):
 """
 
 import argparse
+import os
 import pickle
 import re
 import sys
@@ -57,6 +58,10 @@ OLLAMA_BASE     = "http://aleatico2.imago7.local:11434"
 EMBED_MODEL     = "nomic-embed-text"
 RELOAD_SECS     = 60      # check for index updates every 60 s
 RERANKER_MODEL  = "cross-encoder/ms-marco-MiniLM-L6-v2"  # 66 MB, CPU, ~3 ms/pair
+RERANKER_MODEL_PATH = os.environ.get(
+    "RERANKER_MODEL_PATH",
+    "/opt/lab-server/hf-cache/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2",
+)
 # CANDIDATE_K scales with corpus: 1% of chunks, clamped to [20, 100].
 # Small corpus → 20; large corpus → 100.  Reranker only helps what it sees.
 CANDIDATE_K     = 20      # floor; overridden at query time based on index size
@@ -169,9 +174,25 @@ def _get_reranker():
     with _reranker_lock:
         if _reranker is None:
             try:
-                _reranker = CrossEncoder(RERANKER_MODEL, max_length=512)
+                model_source = RERANKER_MODEL
+                local_path = Path(RERANKER_MODEL_PATH)
+                if local_path.is_dir():
+                    has_weights = (local_path / "model.safetensors").exists() or (local_path / "pytorch_model.bin").exists()
+                    has_config = (local_path / "config.json").exists()
+                    if has_weights and has_config:
+                        model_source = str(local_path)
+                    else:
+                        snapshots = list(local_path.glob("snapshots/*"))
+                        for snap in snapshots:
+                            if (snap / "config.json").exists() and (
+                                (snap / "model.safetensors").exists() or (snap / "pytorch_model.bin").exists()
+                            ):
+                                model_source = str(snap)
+                                break
+
+                _reranker = CrossEncoder(model_source, max_length=512)
                 sys.stderr.write(
-                    f"[lab-knowledge] Reranker loaded: {RERANKER_MODEL}\n"
+                    f"[lab-knowledge] Reranker loaded: {model_source}\n"
                 )
             except Exception as e:
                 sys.stderr.write(f"[lab-knowledge] Reranker load failed: {e}\n")

@@ -10,6 +10,7 @@ Group=root
 Environment="HF_HOME=/opt/lab-server/hf-cache"
 Environment="HUGGINGFACE_HUB_CACHE=/opt/lab-server/hf-cache/hub"
 Environment="TRANSFORMERS_CACHE=/opt/lab-server/hf-cache/transformers"
+Environment="RERANKER_MODEL_PATH=/opt/lab-server/hf-cache/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2"
 
 ExecStart=/opt/lab-server/.venv-lab-mcp/bin/python \
     /opt/lab-server/lab-knowledge-server.py \

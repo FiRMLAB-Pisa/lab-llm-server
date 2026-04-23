@@ -200,9 +200,12 @@ if [[ -x "${LAB_PY}" ]]; then
     RERANKER_OK=$(HF_HOME=/opt/lab-server/hf-cache \
                   HUGGINGFACE_HUB_CACHE=/opt/lab-server/hf-cache/hub \
                   TRANSFORMERS_CACHE=/opt/lab-server/hf-cache/transformers \
+                  RERANKER_MODEL_PATH=/opt/lab-server/hf-cache/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2 \
                   "${LAB_PY}" -c "
+import os
 from sentence_transformers import CrossEncoder
-m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
+model = os.environ.get('RERANKER_MODEL_PATH', 'cross-encoder/ms-marco-MiniLM-L6-v2')
+m = CrossEncoder(model, max_length=512)
 s = m.predict([('T1 relaxation', 'T1 is the longitudinal relaxation time constant')])
 print('ok' if float(s[0]) > -10 else 'bad')
 " 2>/dev/null)
