@@ -40,9 +40,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
+    import fastmcp
+    print(f"[lab-websearch] fastmcp version: {getattr(fastmcp, '__version__', 'unknown')}")
     mcp = FastMCP("lab-web-search")
     print(f"Lab web search MCP server listening on http://0.0.0.0:{args.port}/", flush=True)
-    mcp.run(port=args.port, transport="http")
+    try:
+        mcp.run(port=args.port, transport="http")
+    except Exception as e:
+        print(f"[lab-websearch] fastmcp version: {getattr(fastmcp, '__version__', 'unknown')}")
+        print(f"[lab-websearch] MCP server failed to start: {e}")
+        raise
 
 
 if __name__ == "__main__":

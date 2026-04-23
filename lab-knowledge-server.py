@@ -84,9 +84,16 @@ def main():
 
     global _embeddings, _documents, _metadata, _bm25, _reranker, _index_mtime, _lock, _ready
     # ...existing code for loading index, etc...
+    import fastmcp
+    print(f"[lab-knowledge] fastmcp version: {getattr(fastmcp, '__version__', 'unknown')}")
     mcp = FastMCP("lab-knowledge")
     print(f"Lab knowledge MCP server listening on http://0.0.0.0:{args.port}/", flush=True)
-    mcp.run(port=args.port, transport="http")
+    try:
+        mcp.run(port=args.port, transport="http")
+    except Exception as e:
+        print(f"[lab-knowledge] fastmcp version: {getattr(fastmcp, '__version__', 'unknown')}")
+        print(f"[lab-knowledge] MCP server failed to start: {e}")
+        raise
 
 
 if __name__ == "__main__":
