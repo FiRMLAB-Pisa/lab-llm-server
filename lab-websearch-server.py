@@ -41,8 +41,8 @@ def main():
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
     mcp = FastMCP("lab-web-search")
-    print(f"Lab web search MCP server listening on http://0.0.0.0:{args.port}/sse", flush=True)
-    mcp.run(port=args.port, transport="sse")
+    print(f"Lab web search MCP server listening on http://0.0.0.0:{args.port}/", flush=True)
+    mcp.run(port=args.port, transport="http")
 
 
 if __name__ == "__main__":
