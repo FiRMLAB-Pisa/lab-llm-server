@@ -33,7 +33,7 @@ from mcp.server.fastmcp import FastMCP
 SEARXNG_URL = "http://127.0.0.1:8080"
 PORT = 8000  # FastMCP always binds to 8000 in this version
 
-mcp = FastMCP("lab-web-search", transport="sse", port=PORT, host="0.0.0.0")
+mcp = FastMCP("lab-web-search")
 
 
 @mcp.tool()
