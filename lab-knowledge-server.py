@@ -76,7 +76,21 @@ _index_mtime: float             = 0.0
 _lock         = threading.RLock()
 _ready        = threading.Event()
 
-mcp = FastMCP("lab-knowledge")
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=str, default=DEFAULT_ROOT)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    args = parser.parse_args()
+
+    global _embeddings, _documents, _metadata, _bm25, _reranker, _index_mtime, _lock, _ready
+    # ...existing code for loading index, etc...
+    mcp = FastMCP("lab-knowledge")
+    print(f"Lab knowledge MCP server listening on http://0.0.0.0:{args.port}/sse", flush=True)
+    mcp.run(port=args.port, transport="sse")
+
+
+if __name__ == "__main__":
+    main()
 
 
 def _tokenize(text: str) -> list[str]:

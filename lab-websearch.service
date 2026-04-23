@@ -9,7 +9,8 @@ User=root
 Group=root
 
 ExecStart=/opt/lab-server/.venv-lab-mcp/bin/python -u \
-    /opt/lab-server/lab-websearch-server.py
+    /opt/lab-server/lab-websearch-server.py \
+    --port 3003
 
 Restart=on-failure
 RestartSec=10

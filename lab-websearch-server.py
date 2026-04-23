@@ -31,9 +31,22 @@ from urllib.request import urlopen
 from mcp.server.fastmcp import FastMCP
 
 SEARXNG_URL = "http://127.0.0.1:8080"
-PORT = 8000  # FastMCP always binds to 8000 in this version
-
 mcp = FastMCP("lab-web-search")
+import argparse
+
+DEFAULT_PORT = 3003
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    args = parser.parse_args()
+    mcp = FastMCP("lab-web-search")
+    print(f"Lab web search MCP server listening on http://0.0.0.0:{args.port}/sse", flush=True)
+    mcp.run(port=args.port, transport="sse")
+
+
+if __name__ == "__main__":
+    main()
 
 
 @mcp.tool()

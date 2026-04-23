@@ -10,7 +10,8 @@ Group=root
 
 ExecStart=/opt/lab-server/.venv-lab-mcp/bin/python \
     /opt/lab-server/lab-knowledge-server.py \
-    --root /opt/lab-knowledge
+    --root /opt/lab-knowledge \
+    --port 3001
 
 Restart=on-failure
 RestartSec=10

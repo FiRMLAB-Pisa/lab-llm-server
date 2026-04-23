@@ -300,7 +300,8 @@ if [[ ! -x "${LAB_PY}" ]]; then
     LAB_PY="${LAB_CONDA_PY}"
 fi
 info "Installing/upgrading Python packages in lab-mcp env..."
-sudo "${LAB_PY}" -m pip install -q --upgrade "mcp[cli]" numpy requests "rank-bm25" "sentence-transformers" uvicorn
+sudo "${LAB_PY}" -m pip install --upgrade "mcp[cli]"
+sudo "${LAB_PY}" -m pip install -q --upgrade numpy requests "rank-bm25" "sentence-transformers" uvicorn
 info "Python packages ready."
 
 # Pre-download the cross-encoder reranker model so the first query isn't slow.
