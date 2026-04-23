@@ -153,9 +153,9 @@ else
     fail "lab-websearch.service is NOT active — run: sudo systemctl start lab-websearch"
 fi
 
-if curl -sf 'http://127.0.0.1:3003/sse' > /dev/null 2>&1 || \
-   curl -sf --max-time 2 'http://127.0.0.1:3003/' > /dev/null 2>&1; then
-    pass "Web search MCP SSE endpoint reachable at :3003"
+if curl -sf 'http://127.0.0.1:3003/mcp' > /dev/null 2>&1 || \
+    curl -sf --max-time 2 'http://127.0.0.1:3003/' > /dev/null 2>&1; then
+     pass "Web search MCP HTTP endpoint reachable at :3003"
 else
     fail "Web search MCP not reachable at :3003 — check: journalctl -fu lab-websearch"
 fi
@@ -177,9 +177,9 @@ fi
 
 if ss -tln | grep -Eq '(:|\*)3001\b'; then
     pass "Lab knowledge service listening on :3001"
-elif curl -sf --max-time 3 'http://127.0.0.1:3001/sse' > /dev/null 2>&1 || \
-     curl -sf --max-time 3 'http://127.0.0.1:3001/' > /dev/null 2>&1; then
-    pass "Lab knowledge MCP SSE endpoint reachable at :3001"
+elif curl -sf --max-time 3 'http://127.0.0.1:3001/mcp' > /dev/null 2>&1 || \
+    curl -sf --max-time 3 'http://127.0.0.1:3001/' > /dev/null 2>&1; then
+    pass "Lab knowledge MCP HTTP endpoint reachable at :3001"
 else
     fail "Lab knowledge MCP not reachable at :3001 — check: journalctl -fu lab-knowledge"
 fi

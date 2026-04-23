@@ -7,6 +7,9 @@ After=network.target ollama.service
 Type=simple
 User=root
 Group=root
+Environment="HF_HOME=/opt/lab-server/hf-cache"
+Environment="HUGGINGFACE_HUB_CACHE=/opt/lab-server/hf-cache/hub"
+Environment="TRANSFORMERS_CACHE=/opt/lab-server/hf-cache/transformers"
 
 ExecStart=/opt/lab-server/.venv-lab-mcp/bin/python \
     /opt/lab-server/lab-knowledge-server.py \

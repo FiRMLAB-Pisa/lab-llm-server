@@ -312,7 +312,9 @@ info "Python packages ready."
 # Lab knowledge retrieval works fine with vector+BM25 alone (graceful degradation).
 info "Reranker model pre-download (optional, skip if unreachable)..."
 
-RERANKER_CACHE="/root/.cache/huggingface/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2"
+HF_CACHE_DIR="/opt/lab-server/hf-cache"
+RERANKER_CACHE="${HF_CACHE_DIR}/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2"
+sudo mkdir -p "${HF_CACHE_DIR}/hub" "${HF_CACHE_DIR}/transformers"
 if [[ -d "${RERANKER_CACHE}" ]]; then
     info "Reranker model already cached."
 else
@@ -320,13 +322,14 @@ else
     DOWNLOAD_SCRIPT="${SCRIPT_DIR}/download-reranker.sh"
     if [[ -f "${DOWNLOAD_SCRIPT}" ]]; then
         info "Attempting to download reranker model using curl --insecure..."
-        # Run as root so the cache ends up in /root/.cache where sentence_transformers expects it
-        if timeout 180 sudo bash "${DOWNLOAD_SCRIPT}"; then
+        # Run as root and place artifacts in a shared cache path used by the service.
+        if timeout 180 sudo HF_HOME="${HF_CACHE_DIR}" bash "${DOWNLOAD_SCRIPT}"; then
             info "Reranker model downloaded successfully."
         else
             warn "Reranker download failed. Lab knowledge will use vector+BM25 only."
             warn "To add it manually:"
-            warn "  1. scp -r ~/.cache/huggingface/hub/models--cross-encoder--ms-marco-MiniLM-L6-v2 root@aleatico2:/root/.cache/huggingface/hub/"
+            warn "  1. scp -r ./models--cross-encoder--ms-marco-MiniLM-L6-v2 <user>@aleatico2:/tmp/"
+            warn "  2. ssh <user>@aleatico2 'sudo mkdir -p ${HF_CACHE_DIR}/hub && sudo mv /tmp/models--cross-encoder--ms-marco-MiniLM-L6-v2 ${HF_CACHE_DIR}/hub/'"
         fi
     else
         warn "Reranker download script not found at ${DOWNLOAD_SCRIPT}."
