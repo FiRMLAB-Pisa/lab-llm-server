@@ -8,7 +8,7 @@ Type=simple
 User=root
 Group=root
 
-ExecStart=/opt/conda/envs/lab-mcp/bin/python \
+ExecStart=/opt/lab-server/.venv-lab-mcp/lab-mcp/bin/python \
     /opt/lab-server/lab-knowledge-server.py \
     --root /opt/lab-knowledge
 
