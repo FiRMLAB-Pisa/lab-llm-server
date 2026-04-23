@@ -5,7 +5,7 @@ After=ollama.service
 [Service]
 Type=oneshot
 User=root
-ExecStart=/opt/lab-server/.venv-lab-mcp/lab-mcp/bin/python -u \
+ExecStart=/opt/lab-server/.venv-lab-mcp/bin/python \
     /opt/lab-server/lab-knowledge-index.py \
     --root /opt/lab-knowledge
 StandardOutput=journal
