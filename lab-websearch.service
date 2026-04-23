@@ -8,8 +8,8 @@ Type=simple
 User=root
 Group=root
 
-ExecStart=/opt/lab-server/.venv-lab-mcp/bin/python \
-    /opt/lab-server/lab-websearch-server.py 3003
+ExecStart=/opt/lab-server/.venv-lab-mcp/bin/python -u \
+    /opt/lab-server/lab-websearch-server.py
 
 Restart=on-failure
 RestartSec=10
