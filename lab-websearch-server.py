@@ -45,7 +45,7 @@ def main():
     mcp = FastMCP("lab-web-search")
     print(f"Lab web search MCP server listening on http://0.0.0.0:{args.port}/", flush=True)
     try:
-        mcp.run(port=args.port, transport="http")
+        mcp.run(transport="http", host="0.0.0.0", port=args.port)
     except Exception as e:
         print(f"[lab-websearch] fastmcp version: {getattr(fastmcp, '__version__', 'unknown')}")
         print(f"[lab-websearch] MCP server failed to start: {e}")

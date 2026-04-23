@@ -89,7 +89,7 @@ def main():
     mcp = FastMCP("lab-knowledge")
     print(f"Lab knowledge MCP server listening on http://0.0.0.0:{args.port}/", flush=True)
     try:
-        mcp.run(port=args.port, transport="http")
+        mcp.run(transport="http", host="0.0.0.0", port=args.port)
     except Exception as e:
         print(f"[lab-knowledge] fastmcp version: {getattr(fastmcp, '__version__', 'unknown')}")
         print(f"[lab-knowledge] MCP server failed to start: {e}")
