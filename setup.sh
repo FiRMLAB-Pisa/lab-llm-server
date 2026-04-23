@@ -10,7 +10,7 @@ set -euo pipefail
 # --------------------------------------------------------------------------- #
 OLLAMA_MODELS_DIR="/var/lib/ollama/models"   # where model weights are stored
 OLLAMA_KEEP_ALIVE="30m"   # unload models after 30 min idle (frees GPU)
-OLLAMA_MAX_LOADED_MODELS="2"   # keep 32B + 14B warm simultaneously
+OLLAMA_MAX_LOADED_MODELS="2"   # keep 35B + 24B warm simultaneously
 OLLAMA_NUM_PARALLEL="10"   # serve up to 10 concurrent requests per model
 OPENHANDS_PULL_RETRIES="6"  # tolerate transient DNS/firewall hiccups
 OPENHANDS_PULL_DELAY_SECS="15"
@@ -31,16 +31,17 @@ OLLAMA_HOST="0.0.0.0:11434"
 PRELOAD_DIR="/srv/llm-cache"
 
 # Models to pull (Ollama registry tags)
-# deepseek-r1:32b   → Architect mode  (~20 GB VRAM, Q4_K_M)
-# qwen2.5-coder:14b → Code/Agent mode (~9 GB VRAM, Q4_K_M)
-# deepseek-r1:7b    → Ask mode        (~5 GB VRAM, Q4_K_M)
-# nomic-embed-text  → Local codebase embeddings for Continue.dev @codebase RAG
-#                     (~300 MB, runs on CPU — does not use the A40)
+# 3-tier Opus/Sonnet/Haiku analogue — all support OpenAI tool-call payloads:
+# qwen3.5:35b        → Orchestrator/Architect  (~24 GB VRAM, Q4_K_M, 256k ctx)
+# devstral-small-2   → Code/Debug              (~15 GB VRAM, 384k ctx, SWE-bench specialist)
+# qwen3.5:9b         → Ask                     (~7 GB VRAM, Q4_K_M, 256k ctx)
+# nomic-embed-text   → Local codebase embeddings for Continue.dev @codebase RAG
+#                      (~300 MB, runs on CPU — does not use the A40)
 # starcoder2:3b      → Tab autocomplete (FIM, ~2 GB VRAM, ~150 ms latency)
 MODELS=(
-    "deepseek-r1:32b"
-    "qwen2.5-coder:14b"
-    "deepseek-r1:7b"
+    "qwen3.5:35b"
+    "devstral-small-2"
+    "qwen3.5:9b"
     "nomic-embed-text"
     "starcoder2:3b"
 )

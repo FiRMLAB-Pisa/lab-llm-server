@@ -23,7 +23,7 @@ sudo bash setup.sh
 
 `setup.sh` does the following automatically (takes 20–40 min, mostly model downloads):
 1. Installs Ollama and configures it as a systemd service bound to all interfaces
-2. Pulls all models: `deepseek-r1:32b`, `qwen2.5-coder:14b`, `deepseek-r1:7b`, `nomic-embed-text`, `starcoder2:3b`
+2. Pulls all models: `qwen3.5:35b`, `devstral-small-2`, `qwen3.5:9b`, `nomic-embed-text`, `starcoder2:3b`
 3. Installs the `gpu-clear` script
 4. Installs Docker and starts the OpenHands background agent on port 3000
 5. Installs the lab knowledge MCP service on port 3001
@@ -194,15 +194,15 @@ If you need to run a GPU-intensive job (PyTorch, TensorFlow, CUDA):
 | Roo Code Mode | Model | VRAM | Purpose |
 |---|---|---|
 ---|
-| **Orchestrator** | `deepseek-r1:32b` | ~20 GB | Meta-agent: breaks complex tasks into subtasks, delegates automatically |
-| Architect | `deepseek-r1:32b` | ~20 GB | Planning, understanding unfamiliar code |
-| Code | `qwen2.5-coder:14b` | ~9 GB | File edits, terminal commands, tool use |
-| Ask | `deepseek-r1:7b` | ~5 GB | Quick Q&A, explanations |
-| Debug | `qwen2.5-coder:14b` | ~9 GB | Tracing errors, reading tracebacks |
+| **Orchestrator** | `qwen3.5:35b` | ~24 GB | Meta-agent: breaks complex tasks into subtasks, delegates automatically |
+| Architect | `qwen3.5:35b` | ~24 GB | Planning, understanding unfamiliar code |
+| Code | `devstral-small-2` | ~15 GB | File edits, terminal commands, tool use — SWE-bench specialist |
+| Ask | `qwen3.5:9b` | ~7 GB | Quick Q&A, explanations — fast, tool-capable |
+| Debug | `devstral-small-2` | ~15 GB | Tracing errors, reading tracebacks |
 | Autocomplete | `starcoder2:3b` | ~2 GB | Ghost-text tab completion (Continue.dev) |
 
-Orchestrator and Architect share the 32B model — only one copy is loaded.
-32B + 14B loaded simultaneously = ~29 GB VRAM, leaving ~17 GB for KV cache.
+Orchestrator and Architect share the 35B model — only one copy is loaded.
+35B or 24B loaded at a time = 24 GB peak VRAM, leaving ~24 GB for KV cache.
 `nomic-embed-text` and `starcoder2:3b` are small — minimal VRAM impact.
 
 **Multi-user:** configured for up to 10 simultaneous users (`OLLAMA_NUM_PARALLEL=10`).
@@ -211,7 +211,7 @@ Monitor in real time: `watch -n 2 nvidia-smi`
 
 ### Updating models
 
-New DeepSeek and Qwen releases appear every few months and bring meaningful
+New Qwen and Devstral releases appear every few months and bring meaningful
 quality improvements. Run the update script monthly (no service restart needed —
 Ollama picks up new versions automatically from the next request):
 
@@ -220,9 +220,34 @@ bash ~/lab-llm-server/update-models.sh
 ```
 
 The script pulls all models, shows what changed, and optionally runs `smoke-test.sh`.
-To switch to a different model version entirely (e.g. `deepseek-r1:70b` if VRAM allows),
-edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update the mode
-assignments in `lab-workspace-template/.vscode/settings.json`.
+
+### Upgrading the model architecture (replacing model families)
+
+When a better model family becomes available (as happened moving from DeepSeek→Qwen3.5/Devstral),
+use `migrate-models.sh` to pull new models, verify inference, then remove deprecated ones safely:
+
+```bash
+# Dry-run first — see exactly what will be pulled and removed:
+bash ~/lab-llm-server/migrate-models.sh --dry-run
+
+# Apply the migration:
+bash ~/lab-llm-server/migrate-models.sh
+
+# Confirm all services still pass:
+bash ~/lab-llm-server/smoke-test.sh
+```
+
+After migration, update the workspace template and notify users to pull and reload:
+
+```bash
+git -C ~/lab-workspace-template pull   # on aleatico2 or wherever the template lives
+# Users: git pull in their project repo, then F1 → Developer: Reload Window in VSCode
+# Users: set sticky model per mode once (see client README Quick Start)
+```
+
+To switch to a specific model version (e.g. `qwen3.5:35b-q8_0` if VRAM allows),
+edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update
+`lab-workspace-template/.vscode/settings.json` and run `migrate-models.sh`.
 
 ---
 
