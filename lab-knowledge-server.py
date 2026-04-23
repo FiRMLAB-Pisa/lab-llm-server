@@ -296,7 +296,6 @@ def search_knowledge(query: str, n_results: int = 5) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=DEFAULT_ROOT)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
 
     index_file = Path(args.root) / ".index" / "index.pkl"
@@ -304,17 +303,14 @@ def main() -> None:
     # Start background watcher — loads index immediately, then polls
     threading.Thread(target=_watch_loop, args=(index_file,), daemon=True).start()
 
+    true_port = 8000  # FastMCP always binds to 8000 in this version
     sys.stderr.write(
-        f"[lab-knowledge] Starting HTTP/SSE MCP server on port {args.port}\n"
+        f"[lab-knowledge] Starting HTTP/SSE MCP server on port {true_port} (FastMCP ignores --port)\n"
         f"[lab-knowledge] Index: {index_file}\n"
         f"[lab-knowledge] Roo Code endpoint: "
-        f"http://aleatico2.imago7.local:{args.port}/sse\n"
+        f"http://aleatico2.imago7.local:{true_port}/sse\n"
     )
-    if args.port != DEFAULT_PORT:
-        sys.stderr.write(
-            f"[lab-knowledge] WARNING: FastMCP in this environment uses constructor-bound port; "
-            f"requested --port={args.port}, using {DEFAULT_PORT}.\n"
-        )
+    # No port argument; FastMCP always binds to 8000
     mcp.run(transport="sse")  # Only pass supported arguments; port is now fixed in FastMCP
 
 
