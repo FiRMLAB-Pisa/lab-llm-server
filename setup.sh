@@ -361,6 +361,20 @@ else
     warn "Lab knowledge systemd units patch may have failed. Check manually:"
     warn "  cat /etc/systemd/system/lab-knowledge.service | grep ExecStart"
 fi
+
+# --------------------------------------------------------------------------- #
+# Manual one-time index build with progress bar (recommended for setup)
+# --------------------------------------------------------------------------- #
+info "Building lab knowledge index interactively (progress bar visible)..."
+sudo "${LAB_PY}" /opt/lab-server/lab-knowledge-index.py
+info "Manual index build complete."
+
+# --------------------------------------------------------------------------- #
+# Enable and start nightly auto-indexing (systemd timer)
+# --------------------------------------------------------------------------- #
+info "Enabling and starting nightly lab-knowledge-index.timer..."
+sudo systemctl enable --now lab-knowledge-index.timer
+info "Nightly lab-knowledge-index.timer is active. To monitor background runs: journalctl -fu lab-knowledge-index"
 sudo systemctl daemon-reload
 sudo systemctl enable lab-knowledge.service lab-knowledge-index.timer
 if ! sudo systemctl restart lab-knowledge.service; then

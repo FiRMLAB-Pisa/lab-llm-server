@@ -98,10 +98,37 @@ sudo cp -r /path/to/epic-sdk                              /opt/lab-knowledge/rep
 sudo apt install poppler-utils      # one-time — enables PDF text extraction
 sudo cp EPIC_manual.pdf             /opt/lab-knowledge/docs/
 sudo cp GE_sdk_reference.pdf        /opt/lab-knowledge/docs/
+```
 
-# Trigger the first index run (watch progress):
-sudo systemctl start lab-knowledge-index.service
+---
+
+### One-time manual index build (with progress bar)
+
+For best feedback, run the indexer manually after adding material:
+
+```bash
+sudo /opt/lab-server/.venv-lab-mcp/bin/python /opt/lab-server/lab-knowledge-index.py
+```
+
+This shows a live progress bar and detailed output.
+
+---
+
+### Enable nightly auto-indexing (systemd timer)
+
+After the manual run, enable the nightly refresh:
+
+```bash
+sudo systemctl enable --now lab-knowledge-index.timer
+```
+
+This will re-index automatically every night at 02:00. To monitor background runs:
+
+```bash
 journalctl -fu lab-knowledge-index
+```
+
+---
 
 # After the first index completes, run full smoke validation:
 bash ~/lab-llm-server/smoke-test.sh
