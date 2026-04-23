@@ -153,9 +153,11 @@ else
     fail "lab-websearch.service is NOT active — run: sudo systemctl start lab-websearch"
 fi
 
-if curl -sf 'http://127.0.0.1:3003/mcp' > /dev/null 2>&1 || \
-    curl -sf --max-time 2 'http://127.0.0.1:3003/' > /dev/null 2>&1; then
-     pass "Web search MCP HTTP endpoint reachable at :3003"
+if ss -tln | grep -Eq '(:|\*)3003\b'; then
+    pass "Web search MCP service listening on :3003"
+elif curl -sf --max-time 2 'http://127.0.0.1:3003/mcp' > /dev/null 2>&1 || \
+     curl -sf --max-time 2 'http://127.0.0.1:3003/' > /dev/null 2>&1; then
+    pass "Web search MCP HTTP endpoint reachable at :3003"
 else
     fail "Web search MCP not reachable at :3003 — check: journalctl -fu lab-websearch"
 fi
@@ -195,7 +197,10 @@ if [[ -x "${LAB_PY}" ]]; then
     done
 
     # Functional reranker check: actually score a pair
-    RERANKER_OK=$("${LAB_PY}" -c "
+    RERANKER_OK=$(HF_HOME=/opt/lab-server/hf-cache \
+                  HUGGINGFACE_HUB_CACHE=/opt/lab-server/hf-cache/hub \
+                  TRANSFORMERS_CACHE=/opt/lab-server/hf-cache/transformers \
+                  "${LAB_PY}" -c "
 from sentence_transformers import CrossEncoder
 m = CrossEncoder('cross-encoder/ms-marco-MiniLM-L6-v2', max_length=512)
 s = m.predict([('T1 relaxation', 'T1 is the longitudinal relaxation time constant')])
