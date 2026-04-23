@@ -315,7 +315,7 @@ def main() -> None:
             f"[lab-knowledge] WARNING: FastMCP in this environment uses constructor-bound port; "
             f"requested --port={args.port}, using {DEFAULT_PORT}.\n"
         )
-    mcp.run(transport="sse", port=DEFAULT_PORT, host="0.0.0.0")
+    mcp.run(transport="sse")
 
 
 if __name__ == "__main__":
