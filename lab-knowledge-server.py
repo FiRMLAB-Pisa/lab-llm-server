@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import requests
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 try:
     from rank_bm25 import BM25Okapi

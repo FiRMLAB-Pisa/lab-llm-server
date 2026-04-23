@@ -28,7 +28,7 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 SEARXNG_URL = "http://127.0.0.1:8080"
 mcp = FastMCP("lab-web-search")
