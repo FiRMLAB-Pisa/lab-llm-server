@@ -30,8 +30,7 @@ LOCAL_CACHE="${HOME}/.llm-prefetch-cache"           # temp dir on fast machine
 OLLAMA_PORT="11435"                                 # avoid clash if port 11434 is in use
 
 MODELS=(
-    "qwen3.5:35b"
-    "devstral-small-2"
+    "qwen3.5:27b-q8_0"
     "qwen3.5:9b"
     "nomic-embed-text"
     "starcoder2:3b"

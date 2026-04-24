@@ -5,7 +5,7 @@ Replaces GitHub Copilot with fully open-source, on-premises models accessible
 to all lab members over the lab LAN and GlobalProtect VPN.
 
 **Stack:**
-- **Ollama** — serves Qwen3.5 and Devstral models (LAN-accessible)
+- **Ollama** — serves Qwen3.5 models (LAN-accessible)
 - **Roo Code** (VSCode extension) — interactive agentic coding with plan/edit/debug modes
 - **OpenHands** — browser-based background agent (async tasks, no editor needed)
 - **MCP codebase search** — per-project semantic search auto-called by Roo Code
@@ -23,7 +23,7 @@ sudo bash setup.sh
 
 `setup.sh` does the following automatically (takes 20–40 min, mostly model downloads):
 1. Installs Ollama and configures it as a systemd service bound to all interfaces
-2. Pulls all models: `qwen3.5:35b`, `devstral-small-2`, `qwen3.5:9b`, `nomic-embed-text`, `starcoder2:3b`
+2. Pulls all models: `qwen3.5:27b-q8_0`, `qwen3.5:9b`, `nomic-embed-text`, `starcoder2:3b`
 3. Installs the `gpu-clear` script
 4. Installs Docker and starts the OpenHands background agent on port 3000
 5. Installs the lab knowledge MCP service on port 3001
@@ -242,24 +242,27 @@ If you need to run a GPU-intensive job (PyTorch, TensorFlow, CUDA):
 | Roo Code Mode | Model | VRAM | Purpose |
 |---|---|---|
 ---|
-| **Orchestrator** | `qwen3.5:35b` | ~24 GB | Meta-agent: breaks complex tasks into subtasks, delegates automatically |
-| Architect | `qwen3.5:35b` | ~24 GB | Planning, understanding unfamiliar code |
-| Code | `devstral-small-2` | ~15 GB | File edits, terminal commands, tool use — SWE-bench specialist |
+| **Orchestrator** | `qwen3.5:27b-q8_0` | ~30 GB | Meta-agent: breaks complex tasks into subtasks, delegates automatically |
+| Architect | `qwen3.5:27b-q8_0` | ~30 GB | Planning, understanding unfamiliar code |
+| Code | `qwen3.5:27b-q8_0` | ~30 GB | File edits, terminal commands, tool use |
 | Ask | `qwen3.5:9b` | ~7 GB | Quick Q&A, explanations — fast, tool-capable |
-| Debug | `devstral-small-2` | ~15 GB | Tracing errors, reading tracebacks |
-| Autocomplete | `starcoder2:3b` | ~2 GB | Ghost-text tab completion (Continue.dev) |
+| Debug | `qwen3.5:27b-q8_0` | ~30 GB | Tracing errors, reading tracebacks |
+| Autocomplete | `starcoder2:3b` | ~2 GB | Ghost-text tab completion (Continue.dev, port 11435) |
 
-Orchestrator and Architect share the 35B model — only one copy is loaded.
-35B or 24B loaded at a time = 24 GB peak VRAM, leaving ~24 GB for KV cache.
-`nomic-embed-text` and `starcoder2:3b` are small — minimal VRAM impact.
+All reasoning modes share a single model — no model-switching overhead during
+Orchestrator subagent chains. `qwen3.5:27b-q8_0` is a dense model (all 27B
+parameters active per token, Q8_0 near-full precision), significantly stronger
+for multi-step reasoning than the previous MoE 35B (which had only 3B active params/token).
 
-**Multi-user:** configured for up to 10 simultaneous users (`OLLAMA_NUM_PARALLEL=10`).
-Roo Code sessions and OpenHands tasks share the same pool — any mix up to 10 is fine.
-Monitor in real time: `watch -n 2 nvidia-smi`
+VRAM budget: ~30 GB weights + ~5 GB KV cache (3 slots, 256k ctx) + ~2 GB starcoder2:3b
++ ~3 GB CUDA overhead = ~40 GB total, leaving ~8 GB headroom on the A40.
+
+**Multi-user:** up to 3 simultaneous requests per model slot (`OLLAMA_NUM_PARALLEL=3`).
+Requests beyond 3 are queued, not rejected. Monitor in real time: `watch -n 2 nvidia-smi`
 
 ### Updating models
 
-New Qwen and Devstral releases appear every few months and bring meaningful
+New Qwen3.5 releases appear every few months and bring meaningful
 quality improvements. Run the update script monthly (no service restart needed —
 Ollama picks up new versions automatically from the next request):
 
@@ -271,7 +274,7 @@ The script pulls all models, shows what changed, and optionally runs `smoke-test
 
 ### Upgrading the model architecture (replacing model families)
 
-When a better model family becomes available (as happened moving from DeepSeek→Qwen3.5/Devstral),
+When a better model family becomes available (as happened moving from DeepSeek→Qwen3.5),
 use `migrate-models.sh` to pull new models, verify inference, then remove deprecated ones safely:
 
 ```bash
@@ -293,7 +296,7 @@ git -C ~/lab-workspace-template pull   # on aleatico2 or wherever the template l
 # Users: set sticky model per mode once (see client README Quick Start)
 ```
 
-To switch to a specific model version (e.g. `qwen3.5:35b-q8_0` if VRAM allows),
+To switch to a specific model version (e.g. a newer `qwen3.5:27b` quantization if available),
 edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update
 `lab-workspace-template/.vscode/settings.json` and run `migrate-models.sh`.
 
@@ -303,7 +306,7 @@ edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update
 
 | Service | Port | URL | Purpose |
 |---|---|---|---|
-| Ollama (inference) | 11434 | `http://aleatico2.imago7.local:11434` | LLM inference — qwen3.5:35b, devstral-small-2, qwen3.5:9b |
+| Ollama (inference) | 11434 | `http://aleatico2.imago7.local:11434` | LLM inference — qwen3.5:27b-q8_0, qwen3.5:9b |
 | Ollama (autocomplete) | 11435 | `http://aleatico2.imago7.local:11435` | Tab autocomplete only — starcoder2:3b, isolated from inference |
 | OpenHands | 3000 | `http://aleatico2.imago7.local:3000` | Browser-based background agent |
 | Lab Knowledge MCP | 3001 | `http://aleatico2.imago7.local:3001/sse` | Semantic search over lab SDKs/docs |

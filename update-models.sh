@@ -17,8 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 MODELS=(
-    "qwen3.5:35b"
-    "devstral-small-2"
+    "qwen3.5:27b-q8_0"
     "qwen3.5:9b"
     "nomic-embed-text"
     "starcoder2:3b"

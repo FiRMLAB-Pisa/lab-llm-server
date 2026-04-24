@@ -2,9 +2,9 @@
 # =============================================================
 # A second, isolated Ollama process dedicated to tab autocomplete.
 # By keeping starcoder2:3b on its own port, it can never evict the
-# large inference models (qwen3.5:35b / devstral-small-2) from VRAM.
+# large inference model (qwen3.5:27b-q8_0) from VRAM.
 #
-# Main Ollama (port 11434): qwen3.5:35b, devstral-small-2, qwen3.5:9b
+# Main Ollama (port 11434): qwen3.5:27b-q8_0, qwen3.5:9b
 #   MAX_LOADED_MODELS=1 → only one large model warm at a time
 # This instance (port 11435): starcoder2:3b only
 #   Always loaded, never competes with inference models

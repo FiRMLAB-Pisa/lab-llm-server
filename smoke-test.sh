@@ -10,8 +10,7 @@ OLLAMA_URL="http://127.0.0.1:11434"
 OPENHANDS_URL="http://127.0.0.1:3000"
 
 REQUIRED_MODELS=(
-    "qwen3.5:35b"
-    "devstral-small-2"
+    "qwen3.5:27b-q8_0"
     "qwen3.5:9b"
     "nomic-embed-text"
 )
@@ -67,7 +66,7 @@ done
 section "Inference — chat completion (short prompt)"
 # --------------------------------------------------------------------------- #
 
-for model in "devstral-small-2" "qwen3.5:9b"; do
+for model in "qwen3.5:27b-q8_0" "qwen3.5:9b"; do
     RESP=$(curl -sf -X POST "${OLLAMA_URL}/api/chat" \
         -H "Content-Type: application/json" \
         -d "{\"model\":\"${model}\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: OK\"}]}" \

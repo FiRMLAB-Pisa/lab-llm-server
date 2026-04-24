@@ -17,9 +17,9 @@ OLLAMA_KEEP_ALIVE="30m"   # unload models after 30 min idle (frees GPU)
 # large inference models from VRAM.
 OLLAMA_MAX_LOADED_MODELS="1"
 # KV cache is pre-allocated for ALL parallel slots at model load time.
-# devstral-small-2 has a 384k context window — with NUM_PARALLEL=10 this
-# pre-allocates ~25 GB of KV cache even when only 1 user is active.
-# 3 parallel slots is realistic for this lab and keeps KV cache to ~7-8 GB.
+# qwen3.5:27b-q8_0 has a 256k context window — with NUM_PARALLEL=3 the
+# KV cache pre-allocation is ~5 GB, keeping total VRAM to ~40 GB.
+# 3 parallel slots is realistic for this lab and keeps headroom comfortable.
 OLLAMA_NUM_PARALLEL="3"
 OPENHANDS_PULL_RETRIES="6"  # tolerate transient DNS/firewall hiccups
 OPENHANDS_PULL_DELAY_SECS="15"
@@ -40,16 +40,17 @@ OLLAMA_HOST="0.0.0.0:11434"
 PRELOAD_DIR="/srv/llm-cache"
 
 # Models to pull (Ollama registry tags)
-# 3-tier Opus/Sonnet/Haiku analogue — all support OpenAI tool-call payloads:
-# qwen3.5:35b        → Orchestrator/Architect  (~24 GB VRAM, Q4_K_M, 256k ctx)
-# devstral-small-2   → Code/Debug              (~15 GB VRAM, 384k ctx, SWE-bench specialist)
-# qwen3.5:9b         → Ask                     (~7 GB VRAM, Q4_K_M, 256k ctx)
-# nomic-embed-text   → Local codebase embeddings for Continue.dev @codebase RAG
+# qwen3.5:27b-q8_0  → All reasoning modes (Orchestrator/Architect/Code/Debug)
+#                      Dense 27B model, all parameters active per token, Q8_0 near-full precision
+#                      (~30 GB VRAM, 256k ctx) — replaces both qwen3.5:35b (MoE) and devstral
+#                      The 35b tag was a MoE model with only 3B active params/token;
+#                      27b-q8_0 is denser and significantly stronger for multi-step reasoning
+# qwen3.5:9b         → Ask mode (~7 GB VRAM, Q4_K_M, 256k ctx) — fast Q&A, no file edits
+# nomic-embed-text   → Local codebase embeddings for Roo Code codebase indexing
 #                      (~300 MB, runs on CPU — does not use the A40)
-# starcoder2:3b      → Tab autocomplete (FIM, ~2 GB VRAM, ~150 ms latency)
+# starcoder2:3b      → Tab autocomplete (FIM, ~2 GB VRAM, ~150 ms latency, port 11435)
 MODELS=(
-    "qwen3.5:35b"
-    "devstral-small-2"
+    "qwen3.5:27b-q8_0"
     "qwen3.5:9b"
     "nomic-embed-text"
     "starcoder2:3b"
@@ -128,7 +129,7 @@ Environment="OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS}"
 # Auto-unload models after KEEP_ALIVE idle time (frees GPU for scientific jobs)
 Environment="OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE}"
 # KV cache is pre-allocated per slot at model load — 3 parallel slots keeps
-# cache overhead to ~7-8 GB even for devstral's large context window
+# cache overhead to ~5 GB for qwen3.5:27b-q8_0's 256k context window
 Environment="OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL}"
 # Where model weights are stored (ensure this partition has enough space)
 Environment="OLLAMA_MODELS=${OLLAMA_MODELS_DIR}"
@@ -227,6 +228,22 @@ for model in "${MODELS[@]}"; do
         info "Pulling ${model}..."
         ollama pull "${model}"
         info "Done: ${model}"
+    fi
+done
+
+# Remove models that are no longer part of the active stack to free disk space.
+# Safe to extend this list as model families are upgraded.
+STALE_MODELS=(
+    "qwen3.5:35b"
+    "devstral-small-2"
+    "deepseek-r1:32b"
+    "qwen2.5-coder:14b"
+    "deepseek-r1:7b"
+)
+for model in "${STALE_MODELS[@]}"; do
+    if ollama list | awk 'NR>1 {print $1}' | grep -Fxq "${model}"; then
+        info "Removing stale model: ${model}"
+        ollama rm "${model}"
     fi
 done
 
