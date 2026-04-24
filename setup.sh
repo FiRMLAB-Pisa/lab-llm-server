@@ -5,6 +5,8 @@
 # =============================================================================
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # --------------------------------------------------------------------------- #
 # Configuration — edit these if needed
 # --------------------------------------------------------------------------- #
@@ -249,7 +251,6 @@ sudo systemctl enable docker
 sudo systemctl start docker
 
 info "Starting OpenHands background agent..."
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/openhands-compose.yml"
 [[ -f "${COMPOSE_FILE}" ]] || die "openhands-compose.yml not found at ${COMPOSE_FILE}"
 
