@@ -122,6 +122,8 @@ Environment="OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE}"
 Environment="OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL}"
 # Where model weights are stored (ensure this partition has enough space)
 Environment="OLLAMA_MODELS=${OLLAMA_MODELS_DIR}"
+# Enable Flash Attention 2 — reduces memory and speeds up prefill on A40
+Environment="OLLAMA_FLASH_ATTENTION=1"
 EOF
 
 sudo systemctl daemon-reload

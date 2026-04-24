@@ -79,6 +79,44 @@ Then `File → Open Folder → ~/M/my-project` in VSCode. The Python extension w
 you to select an interpreter — pick whichever conda env or venv you prefer; VSCode remembers
 it per-machine. Roo Code is pre-configured — open the panel and start chatting.
 
+### Enable Roo Code codebase indexing (per project, once)
+
+Roo Code has a built-in local RAG index that lets it search your project files
+automatically, without you having to reference them explicitly. Set it up once per
+project the first time you open it:
+
+1. Open the **Roo Code panel** (sidebar icon) → click the **Codebase Indexing** tab
+   (database icon at the top of the panel).
+2. Under **Embeddings Provider**, select **Ollama**.
+3. Set the **Base URL** to `http://aleatico2.imago7.local:11434`.
+4. Set the **Model** to `nomic-embed-text` (already running — no extra download needed).
+5. Click **Index Workspace** and wait for the progress bar to complete.
+   On a large project this takes 1–2 minutes; subsequent re-indexes are incremental.
+
+The index is stored in `.roo-index/` inside the project directory. Add it to `.gitignore`
+to avoid committing it:
+
+```bash
+echo ".roo-index/" >> .gitignore
+```
+
+Roo will automatically re-index when files change. You can also trigger a manual
+re-index from the same tab at any time.
+
+**How this works alongside the lab knowledge MCP (`search_knowledge`):**
+
+Both are active at the same time — they are not alternatives.
+
+| | Roo codebase index | Lab knowledge MCP |
+|---|---|---|
+| Scope | Current workspace only | All repos in `/opt/lab-knowledge/` |
+| How it fires | **Passively** — Roo retrieves relevant chunks and injects them into the context before the model sees your message. The model is not aware this happened. | **Actively** — the model decides to call `search_knowledge` as an explicit tool when it judges external context is needed. You can see these calls in the chat. |
+| Best for | The project you're actively editing | Cross-repo context: SDKs, vendor docs, shared libs |
+
+On any given turn, both can fire independently: the codebase index is always injected
+passively, and the model may additionally call the knowledge MCP if it decides it needs
+more context. There is no "switching" between them.
+
 ---
 
 ## Step 4 — Populate the Lab Knowledge Base (admin, as material becomes available)
