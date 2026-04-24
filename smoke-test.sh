@@ -107,6 +107,32 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
+section "Ollama autocomplete instance (starcoder2:3b, port 11435)"
+# --------------------------------------------------------------------------- #
+
+AUTOCOMPLETE_URL="http://127.0.0.1:11435"
+
+if systemctl is-active --quiet ollama-autocomplete; then
+    pass "ollama-autocomplete.service is active"
+else
+    fail "ollama-autocomplete.service is NOT active — run: sudo systemctl start ollama-autocomplete"
+fi
+
+if curl -sf "${AUTOCOMPLETE_URL}/api/tags" > /dev/null 2>&1; then
+    pass "Autocomplete Ollama API reachable at :11435"
+else
+    fail "Autocomplete Ollama not reachable at :11435 — check: journalctl -u ollama-autocomplete -n 50"
+fi
+
+AUTOCOMPLETE_MODELS=$(curl -sf "${AUTOCOMPLETE_URL}/api/tags" 2>/dev/null | \
+    python3 -c "import sys,json; tags=json.load(sys.stdin).get('models',[]); [print(m.get('name','')) for m in tags]" 2>/dev/null)
+if echo "${AUTOCOMPLETE_MODELS}" | grep -Eq "^starcoder2:3b(:|$)"; then
+    pass "starcoder2:3b available on autocomplete instance"
+else
+    fail "starcoder2:3b not loaded on :11435 — run: OLLAMA_HOST=127.0.0.1:11435 ollama pull starcoder2:3b"
+fi
+
+# --------------------------------------------------------------------------- #
 section "OpenHands"
 # --------------------------------------------------------------------------- #
 
@@ -160,6 +186,27 @@ elif curl -sf --max-time 2 'http://127.0.0.1:3003/mcp' > /dev/null 2>&1 || \
     pass "Web search MCP HTTP endpoint reachable at :3003"
 else
     fail "Web search MCP not reachable at :3003 — check: journalctl -fu lab-websearch"
+fi
+
+# --------------------------------------------------------------------------- #
+section "Qdrant (vector DB for Roo Code codebase indexing)"
+# --------------------------------------------------------------------------- #
+
+if docker compose -f "${SCRIPT_DIR}/qdrant-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
+    pass "Qdrant container is running"
+elif curl -sf 'http://127.0.0.1:6333/healthz' > /dev/null 2>&1 || \
+     curl -sf 'http://127.0.0.1:6333/' > /dev/null 2>&1; then
+    pass "Qdrant reachable at 127.0.0.1:6333 (container status check unavailable)"
+else
+    fail "Qdrant container is NOT running — run: docker compose -f ~/lab-llm-server/qdrant-compose.yml up -d"
+fi
+
+if curl -sf 'http://127.0.0.1:6333/healthz' > /dev/null 2>&1; then
+    pass "Qdrant health endpoint OK at 127.0.0.1:6333"
+elif curl -sf 'http://127.0.0.1:6333/collections' > /dev/null 2>&1; then
+    pass "Qdrant collections endpoint reachable at 127.0.0.1:6333"
+else
+    fail "Qdrant not reachable at :6333 — check: docker compose -f ~/lab-llm-server/qdrant-compose.yml logs"
 fi
 
 # --------------------------------------------------------------------------- #

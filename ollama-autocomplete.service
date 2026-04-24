@@ -1,0 +1,47 @@
+# Ollama autocomplete instance — starcoder2:3b on port 11435
+# =============================================================
+# A second, isolated Ollama process dedicated to tab autocomplete.
+# By keeping starcoder2:3b on its own port, it can never evict the
+# large inference models (qwen3.5:35b / devstral-small-2) from VRAM.
+#
+# Main Ollama (port 11434): qwen3.5:35b, devstral-small-2, qwen3.5:9b
+#   MAX_LOADED_MODELS=1 → only one large model warm at a time
+# This instance (port 11435): starcoder2:3b only
+#   Always loaded, never competes with inference models
+#
+# Continue.dev tabAutocompleteModel points to http://aleatico2:11435
+
+[Unit]
+Description=Ollama autocomplete service (starcoder2:3b, port 11435)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+
+# Bind to a separate port — no conflict with main Ollama on 11434
+Environment="OLLAMA_HOST=0.0.0.0:11435"
+# Only ever keep starcoder2:3b loaded (~2 GB) — never load a large model
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+# Long keep-alive — autocomplete should always feel instant
+Environment="OLLAMA_KEEP_ALIVE=120m"
+# Modest parallelism — autocomplete requests are short and numerous
+Environment="OLLAMA_NUM_PARALLEL=4"
+# Share the same model weights directory as the main Ollama instance
+Environment="OLLAMA_MODELS=/var/lib/ollama/models"
+# Flash Attention for the small model too (negligible overhead, consistent config)
+Environment="OLLAMA_FLASH_ATTENTION=1"
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama-autocomplete
+
+# Give it time to load starcoder on startup
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

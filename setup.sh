@@ -10,8 +10,15 @@ set -euo pipefail
 # --------------------------------------------------------------------------- #
 OLLAMA_MODELS_DIR="/var/lib/ollama/models"   # where model weights are stored
 OLLAMA_KEEP_ALIVE="30m"   # unload models after 30 min idle (frees GPU)
-OLLAMA_MAX_LOADED_MODELS="2"   # keep 35B + 24B warm simultaneously
-OLLAMA_NUM_PARALLEL="10"   # serve up to 10 concurrent requests per model
+# Only 1 large model loaded at a time on the main instance — starcoder2:3b
+# lives on a separate Ollama process (port 11435) so it can never evict the
+# large inference models from VRAM.
+OLLAMA_MAX_LOADED_MODELS="1"
+# KV cache is pre-allocated for ALL parallel slots at model load time.
+# devstral-small-2 has a 384k context window — with NUM_PARALLEL=10 this
+# pre-allocates ~25 GB of KV cache even when only 1 user is active.
+# 3 parallel slots is realistic for this lab and keeps KV cache to ~7-8 GB.
+OLLAMA_NUM_PARALLEL="3"
 OPENHANDS_PULL_RETRIES="6"  # tolerate transient DNS/firewall hiccups
 OPENHANDS_PULL_DELAY_SECS="15"
 # Set to 1 to disable SSL certificate verification for HuggingFace Hub downloads.
@@ -114,11 +121,12 @@ sudo tee "${DROPIN_DIR}/override.conf" > /dev/null <<EOF
 # Bind to all interfaces so every lab server and VPN client can reach the API
 # at http://aleatico2.imago7.local:11434 — no SSH tunnel needed.
 Environment="OLLAMA_HOST=${OLLAMA_HOST}"
-# Keep the two primary models (32B + 14B) loaded simultaneously
+# Only one large inference model loaded at a time (starcoder2:3b is on port 11435)
 Environment="OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS}"
 # Auto-unload models after KEEP_ALIVE idle time (frees GPU for scientific jobs)
 Environment="OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE}"
-# Accept up to 2 simultaneous requests without queueing
+# KV cache is pre-allocated per slot at model load — 3 parallel slots keeps
+# cache overhead to ~7-8 GB even for devstral's large context window
 Environment="OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL}"
 # Where model weights are stored (ensure this partition has enough space)
 Environment="OLLAMA_MODELS=${OLLAMA_MODELS_DIR}"
@@ -130,6 +138,32 @@ sudo systemctl daemon-reload
 sudo systemctl enable ollama
 sudo systemctl restart ollama
 info "Ollama service configured and (re)started."
+
+# --------------------------------------------------------------------------- #
+# 2b. Install dedicated autocomplete Ollama instance (port 11435)
+# --------------------------------------------------------------------------- #
+info "Installing Ollama autocomplete service (starcoder2:3b on port 11435)..."
+# Patch the models dir in case it differs from the default
+AUTOCOMPLETE_SERVICE="/etc/systemd/system/ollama-autocomplete.service"
+sudo cp "${SCRIPT_DIR}/ollama-autocomplete.service" "${AUTOCOMPLETE_SERVICE}"
+sudo sed -i "s|OLLAMA_MODELS=/var/lib/ollama/models|OLLAMA_MODELS=${OLLAMA_MODELS_DIR}|"\
+    "${AUTOCOMPLETE_SERVICE}"
+sudo systemctl daemon-reload
+sudo systemctl enable ollama-autocomplete
+sudo systemctl restart ollama-autocomplete
+info "Autocomplete Ollama service started on port 11435."
+
+# Wait for autocomplete instance to be ready
+for i in {1..15}; do
+    if curl -sf http://127.0.0.1:11435/api/tags > /dev/null 2>&1; then
+        info "Autocomplete Ollama is ready."
+        break
+    fi
+    sleep 2
+    if [[ $i -eq 15 ]]; then
+        warn "Autocomplete Ollama did not start in time. Check: journalctl -u ollama-autocomplete -n 50"
+    fi
+done
 
 # Wait for Ollama to be ready
 info "Waiting for Ollama to be ready..."
@@ -436,6 +470,22 @@ info "Web search MCP server started on port 3003."
 info "NOTE: Web search requires internet access on aleatico2."
 info "      If the lab firewall drops the connection, re-authenticate and"
 info "      run: sudo systemctl restart lab-websearch"
+
+# --------------------------------------------------------------------------- #
+# 9. Start Qdrant (vector database for Roo Code codebase indexing)
+# --------------------------------------------------------------------------- #
+info "Starting Qdrant vector database (Roo Code codebase indexing)..."
+docker compose -f "${SCRIPT_DIR}/qdrant-compose.yml" pull --quiet
+docker compose -f "${SCRIPT_DIR}/qdrant-compose.yml" up -d
+info "Qdrant started on 0.0.0.0:6333 (LAN/VPN accessible)."
+info "Roo Code codebase indexing settings:"
+info "  Embedder Provider : Ollama"
+info "  Base URL          : http://aleatico2.imago7.local:11434"
+info "  API Key           : (leave empty)"
+info "  Model             : nomic-embed-text"
+info "  Model Dimension   : 768"
+info "  Qdrant URL        : http://aleatico2.imago7.local:6333"
+info "  Qdrant API Key    : (leave empty)"
 
 # Ensure embedding model is present (needed by lab-knowledge indexing/search).
 if ollama list | awk 'NR>1 {print $1}' | grep -Eq '^nomic-embed-text(:|$)'; then

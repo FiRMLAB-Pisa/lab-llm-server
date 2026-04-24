@@ -87,11 +87,21 @@ project the first time you open it:
 
 1. Open the **Roo Code panel** (sidebar icon) → click the **Codebase Indexing** tab
    (database icon at the top of the panel).
-2. Under **Embeddings Provider**, select **Ollama**.
-3. Set the **Base URL** to `http://aleatico2.imago7.local:11434`.
-4. Set the **Model** to `nomic-embed-text` (already running — no extra download needed).
-5. Click **Index Workspace** and wait for the progress bar to complete.
-   On a large project this takes 1–2 minutes; subsequent re-indexes are incremental.
+2. Fill in the fields exactly as follows:
+
+   | Field | Value |
+   |---|---|
+   | Embedder Provider | `Ollama` |
+   | Base URL | `http://aleatico2.imago7.local:11434` |
+   | API Key | *(leave empty)* |
+   | Model | `nomic-embed-text` *(type in — not a dropdown)* |
+   | Model Dimension | `768` |
+   | Qdrant URL | `http://aleatico2.imago7.local:6333` |
+   | Qdrant API Key | *(leave empty)* |
+
+3. Click **Save and Start Indexing**. A yellow indicator means indexing in progress;
+   green means ready. On a typical project this takes 1–2 minutes; subsequent
+   re-indexes are incremental.
 
 The index is stored in `.roo-index/` inside the project directory. Add it to `.gitignore`
 to avoid committing it:
@@ -293,11 +303,13 @@ edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update
 
 | Service | Port | URL | Purpose |
 |---|---|---|---|
-| Ollama | 11434 | `http://aleatico2.imago7.local:11434` | LLM inference (Roo Code backend) |
+| Ollama (inference) | 11434 | `http://aleatico2.imago7.local:11434` | LLM inference — qwen3.5:35b, devstral-small-2, qwen3.5:9b |
+| Ollama (autocomplete) | 11435 | `http://aleatico2.imago7.local:11435` | Tab autocomplete only — starcoder2:3b, isolated from inference |
 | OpenHands | 3000 | `http://aleatico2.imago7.local:3000` | Browser-based background agent |
 | Lab Knowledge MCP | 3001 | `http://aleatico2.imago7.local:3001/sse` | Semantic search over lab SDKs/docs |
 | **Status dashboard** | **3002** | **`http://aleatico2.imago7.local:3002`** | **Live GPU/model/service status** |
 | Web Search MCP | 3003 | `http://aleatico2.imago7.local:3003/sse` | Live web search via SearXNG |
+| **Qdrant** | **6333** | **`http://aleatico2.imago7.local:6333`** | **Vector DB for Roo Code codebase indexing** |
 | SearXNG | 8080 | `http://127.0.0.1:8080` (localhost only) | Meta search engine (internal) |
 
 All services are reachable from the lab LAN and GlobalProtect VPN.
@@ -306,10 +318,15 @@ Do **not** expose these ports to the public internet.
 ### Management commands
 
 ```bash
-# Ollama
+# Ollama (inference — port 11434)
 sudo systemctl status ollama
 sudo systemctl restart ollama
 journalctl -fu ollama
+
+# Ollama (autocomplete — port 11435, starcoder2:3b)
+sudo systemctl status ollama-autocomplete
+sudo systemctl restart ollama-autocomplete
+journalctl -fu ollama-autocomplete
 
 # OpenHands
 docker compose -f ~/lab-llm-server/openhands-compose.yml ps

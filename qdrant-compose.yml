@@ -1,0 +1,59 @@
+# Qdrant — vector database for Roo Code codebase indexing
+# ==========================================================
+# Roo Code's codebase indexing feature embeds project files using
+# nomic-embed-text (via Ollama) and stores the vectors here.
+# Each user's workspace gets its own Qdrant collection — data is
+# siloed per project and per user automatically by Roo Code.
+#
+# Access (REST API):
+#   http://aleatico2.imago7.local:6333
+#   (Roo Code connects here from each lab desktop / Remote-SSH session)
+#
+# Roo Code codebase indexing settings:
+#   Embedder Provider:  Ollama
+#   Base URL:           http://aleatico2.imago7.local:11434
+#   API Key:            (leave empty)
+#   Model:              nomic-embed-text
+#   Model Dimension:    768
+#   Qdrant URL:         http://aleatico2.imago7.local:6333
+#   Qdrant API Key:     (leave empty)
+#
+# Start (admin, once):
+#   docker compose -f qdrant-compose.yml up -d
+#
+# Logs:
+#   docker compose -f qdrant-compose.yml logs -f
+#
+# Dashboard (web UI):
+#   http://aleatico2.imago7.local:6333/dashboard
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+
+    ports:
+      # REST API — used by Roo Code and accessible from lab LAN / VPN.
+      # Do not expose to the public internet.
+      - "0.0.0.0:6333:6333"
+      # gRPC — not currently used by Roo Code but available for future tools.
+      - "127.0.0.1:6334:6334"
+
+    volumes:
+      # Persistent vector storage — survives container restarts and updates.
+      - qdrant-storage:/qdrant/storage
+
+    environment:
+      # No authentication — safe on the trusted lab LAN / GlobalProtect VPN.
+      # To add auth: set QDRANT__SERVICE__API_KEY and update Roo Code settings.
+      - QDRANT__LOG_LEVEL=INFO
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  qdrant-storage:

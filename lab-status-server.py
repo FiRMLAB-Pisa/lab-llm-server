@@ -25,6 +25,8 @@ from urllib.request import urlopen
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 3002
 OLLAMA_URL = "http://127.0.0.1:11434"
+OLLAMA_AUTOCOMPLETE_URL = "http://127.0.0.1:11435"
+QDRANT_URL = "http://127.0.0.1:6333"
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +83,28 @@ def gpu_status():
         return [], str(e)
 
 
+def ollama_autocomplete_status():
+    """Return (loaded_model_name_or_None, ok_bool) for the autocomplete instance."""
+    try:
+        with urlopen(f"{OLLAMA_AUTOCOMPLETE_URL}/api/ps", timeout=2) as r:
+            models = json.loads(r.read()).get("models", [])
+            name = models[0]["name"] if models else None
+            return name, True
+    except Exception:
+        return None, False
+
+
+def qdrant_status():
+    """Return (n_collections, ok_bool) for the Qdrant instance."""
+    try:
+        with urlopen(f"{QDRANT_URL}/collections", timeout=2) as r:
+            data = json.loads(r.read())
+            n = len(data.get("result", {}).get("collections", []))
+            return n, True
+    except Exception:
+        return 0, False
+
+
 def docker_container_status(name):
     """Return container state string (running / exited / not found)."""
     try:
@@ -121,7 +145,8 @@ def _bytes_to_gib(b):
     return f"{b / 1024:.1f} GiB"
 
 
-def render_html(models, ollama_err, n_available, gpus, gpu_err, oh_state, kb_state, ws_state, sx_state):
+def render_html(models, ollama_err, n_available, gpus, gpu_err, oh_state, kb_state, ws_state, sx_state,
+                ac_model, ac_ok, qdrant_n, qdrant_ok):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     ollama_ok = ollama_err is None
@@ -130,6 +155,8 @@ def render_html(models, ollama_err, n_available, gpus, gpu_err, oh_state, kb_sta
     kb_ok = kb_state == "active"
     ws_ok = ws_state == "active"
     sx_ok = sx_state == "running"
+    ac_label = ac_model if ac_model else ("idle" if ac_ok else "down")
+    qdrant_label = f"{qdrant_n} collection{'s' if qdrant_n != 1 else ''}" if qdrant_ok else "down"
 
     # --- GPU section ---
     if gpu_err and not gpus:
@@ -235,7 +262,9 @@ def render_html(models, ollama_err, n_available, gpus, gpu_err, oh_state, kb_sta
   <div class="card">
     <h2>Services</h2>
     <ul class="svc-list">
-      <li><span>Ollama &nbsp;<span class="dim">:11434</span></span>  {_badge(ollama_ok)}</li>
+      <li><span>Ollama inference &nbsp;<span class="dim">:11434</span></span>  {_badge(ollama_ok)}</li>
+      <li><span>Ollama autocomplete &nbsp;<span class="dim">:11435</span></span> {_badge(ac_ok, ac_label, ac_label)}</li>
+      <li><span>Qdrant &nbsp;<span class="dim">:6333</span></span> {_badge(qdrant_ok, qdrant_label, qdrant_label)}</li>
       <li><span>OpenHands &nbsp;<span class="dim">:3000</span></span> {_badge(oh_ok, "running", oh_state)}</li>
       <li><span>Lab Knowledge &nbsp;<span class="dim">:3001</span></span> {_badge(kb_ok, "active", kb_state)}</li>
       <li><span>Web Search MCP &nbsp;<span class="dim">:3003</span></span> {_badge(ws_ok, "active", ws_state)}</li>
@@ -245,8 +274,10 @@ def render_html(models, ollama_err, n_available, gpus, gpu_err, oh_state, kb_sta
 
   <div class="card links">
     <h2>Quick links</h2>
-    <a href="http://aleatico2.imago7.local:11434/api/tags" target="_blank">Ollama — available models (:11434/api/tags)</a>
-    <a href="http://aleatico2.imago7.local:11434/api/ps"   target="_blank">Ollama — loaded models (:11434/api/ps)</a>
+    <a href="http://aleatico2.imago7.local:11434/api/tags" target="_blank">Ollama inference — available models (:11434/api/tags)</a>
+    <a href="http://aleatico2.imago7.local:11434/api/ps"   target="_blank">Ollama inference — loaded models (:11434/api/ps)</a>
+    <a href="http://aleatico2.imago7.local:11435/api/ps"   target="_blank">Ollama autocomplete — loaded models (:11435/api/ps)</a>
+    <a href="http://aleatico2.imago7.local:6333/dashboard" target="_blank">Qdrant dashboard (:6333/dashboard)</a>
     <a href="http://aleatico2.imago7.local:3000"           target="_blank">OpenHands background agent (:3000)</a>
     <a href="http://aleatico2.imago7.local:3001/sse"       target="_blank">Lab Knowledge MCP (:3001/sse)</a>
   </div>
@@ -280,8 +311,11 @@ class StatusHandler(BaseHTTPRequestHandler):
         sx_state = docker_container_status("searxng")
         kb_state = systemd_service_status("lab-knowledge")
         ws_state = systemd_service_status("lab-websearch")
+        ac_model, ac_ok = ollama_autocomplete_status()
+        qdrant_n, qdrant_ok = qdrant_status()
 
-        html = render_html(models, ollama_err, n_available, gpus, gpu_err, oh_state, kb_state, ws_state, sx_state)
+        html = render_html(models, ollama_err, n_available, gpus, gpu_err, oh_state, kb_state, ws_state, sx_state,
+                           ac_model, ac_ok, qdrant_n, qdrant_ok)
         body = html.encode()
 
         self.send_response(200)
