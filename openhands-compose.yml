@@ -8,7 +8,7 @@
 #   (from any lab desktop or laptop on GlobalProtect VPN)
 #
 # LLM backend: Ollama on the host (aleatico2), same models as Roo Code.
-#   deepseek-r1:32b is used by default.  Users can switch model in the UI.
+#   qwen3.5:35b is used by default.  Users can switch model in the UI.
 #
 # To start (admin, once):
 #   cd server && docker compose -f openhands-compose.yml up -d
@@ -43,7 +43,7 @@ services:
       # ----- LLM backend -----
       # Points to Ollama on the host.  host.docker.internal resolves to the
       # host via the extra_hosts entry below.
-      - LLM_MODEL=ollama/deepseek-r1:32b
+      - LLM_MODEL=ollama/qwen3.5:35b
       - LLM_BASE_URL=http://host.docker.internal:11434
       - LLM_API_KEY=ollama           # required field, value is ignored by Ollama
 

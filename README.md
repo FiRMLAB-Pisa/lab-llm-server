@@ -5,7 +5,7 @@ Replaces GitHub Copilot with fully open-source, on-premises models accessible
 to all lab members over the lab LAN and GlobalProtect VPN.
 
 **Stack:**
-- **Ollama** — serves DeepSeek R1 and Qwen2.5-Coder models (LAN-accessible)
+- **Ollama** — serves Qwen3.5 and Devstral models (LAN-accessible)
 - **Roo Code** (VSCode extension) — interactive agentic coding with plan/edit/debug modes
 - **OpenHands** — browser-based background agent (async tasks, no editor needed)
 - **MCP codebase search** — per-project semantic search auto-called by Roo Code
@@ -31,7 +31,7 @@ sudo bash setup.sh
 7. Installs SearXNG (internal meta search) and the web search MCP service on port 3003
 8. Runs a quick verification and prints a summary of all service URLs
 
-> **Tip:** The 32B model is ~20 GB. Run setup in a `tmux` session so it survives
+> **Tip:** The 35B model is ~24 GB. Run setup in a `tmux` session so it survives
 > disconnection: `tmux new -s setup && sudo bash setup.sh`
 
 ### Verify the server
@@ -278,6 +278,9 @@ docker compose -f ~/lab-llm-server/openhands-compose.yml ps
 docker compose -f ~/lab-llm-server/openhands-compose.yml logs -f
 docker compose -f ~/lab-llm-server/openhands-compose.yml down
 docker compose -f ~/lab-llm-server/openhands-compose.yml up -d
+
+# Update OpenHands image only (without touching Ollama or other services)
+bash ~/lab-llm-server/update-openhands.sh
 
 # Lab knowledge MCP server
 sudo systemctl status lab-knowledge
