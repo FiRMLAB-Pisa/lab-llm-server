@@ -43,9 +43,9 @@ services:
       # ----- LLM backend -----
       # Points to Ollama on the host.  host.docker.internal resolves to the
       # host via the extra_hosts entry below.
-      - LLM_MODEL=ollama/qwen3.5:27b-q8_0
-      - LLM_BASE_URL=http://host.docker.internal:11434
-      - LLM_API_KEY=ollama           # required field, value is ignored by Ollama
+      - LLM_MODEL=openai/qwen3.5:27b-q8_0
+      - LLM_BASE_URL=http://host.docker.internal:4000
+      - LLM_API_KEY=sk-no-key-needed-for-ollama  # LiteLLM accepts any key (no master_key set)
 
       # ----- Agent sandbox images -----
       # Hosted on GHCR; keeps setup working when docker.all-hands.dev is blocked.

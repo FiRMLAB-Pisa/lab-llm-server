@@ -1,0 +1,54 @@
+# LiteLLM Proxy Configuration
+# ==============================
+# Sits between Roo Code and Ollama.  Provides:
+#   - 1-hour request/stream timeout (fixes Roo "API error" on long reasoning chains
+#     where Ollama silently generates hidden chain-of-thought tokens before returning text)
+#   - Usage dashboard at http://aleatico2.imago7.local:4000/ui
+#
+# NOTE on thinking display: LiteLLM v1.63.0+ normalises `reasoning` → `reasoning_content`
+# for supported providers (Deepseek, Anthropic, Bedrock, OpenRouter, etc.).
+# Ollama is NOT in that list — LiteLLM passes Ollama's `reasoning` field through
+# without renaming, so Roo will not render the Thinking... block.
+# The thinking display is blocked on Roo PR #11496 (still Draft) which adds
+# `reasoning` field support to Roo's OpenAiHandler directly.
+# The timeout fix is the primary benefit of this proxy.
+#
+# Roo Code (and OpenHands) connect to:
+#   http://aleatico2.imago7.local:4000/v1
+#
+# Codebase indexing (nomic-embed-text) and Continue.dev tab autocomplete still
+# connect directly to Ollama at :11434 — they use the native Ollama API and do
+# not benefit from this proxy.
+
+model_list:
+  - model_name: qwen3.5:27b-q8_0
+    litellm_params:
+      # openai/ prefix → LiteLLM uses Ollama's OpenAI-compatible /v1 endpoint,
+      # which accepts reasoning_effort and streams reasoning chunks.
+      model: openai/qwen3.5:27b-q8_0
+      api_base: http://host.docker.internal:11434/v1
+      api_key: sk-ollama
+
+  - model_name: qwen3.5:9b
+    litellm_params:
+      model: openai/qwen3.5:9b
+      api_base: http://host.docker.internal:11434/v1
+      api_key: sk-ollama
+
+litellm_settings:
+  # 1-hour timeout — covers very long reasoning chains at high thinking budget.
+  # Without this, the default 600 s timeout fires while the model is still
+  # generating hidden chain-of-thought tokens (the connection looks silent to
+  # the client but the GPU is busy).
+  request_timeout: 3600
+  stream_timeout: 3600
+
+  # Drop-in field for future: set to true once your LiteLLM version supports it
+  # to ensure reasoning chunks are always emitted in reasoning_content format.
+  # Currently passed through transparently.
+  # forward_reasoning_content: true
+
+general_settings:
+  # No master key — any API key is accepted (consistent with Ollama's no-auth setup).
+  # Clients continue to use: sk-no-key-needed-for-ollama
+  drop_params: true

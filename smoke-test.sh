@@ -7,6 +7,7 @@
 set -uo pipefail
 
 OLLAMA_URL="http://127.0.0.1:11434"
+LITELLM_URL="http://127.0.0.1:4000"
 OPENHANDS_URL="http://127.0.0.1:3000"
 
 REQUIRED_MODELS=(
@@ -103,6 +104,32 @@ if echo "${OAI_RESP}" | python3 -c \
     pass "OpenAI-compatible /v1/models endpoint OK"
 else
     fail "OpenAI-compatible endpoint NOT working"
+fi
+
+# --------------------------------------------------------------------------- #
+section "LiteLLM proxy (Roo Code / OpenHands backend, port 4000)"
+# --------------------------------------------------------------------------- #
+
+if docker compose -f "$(dirname "$0")/litellm-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
+    pass "LiteLLM container is running"
+elif curl -sf "${LITELLM_URL}/health" > /dev/null 2>&1; then
+    pass "LiteLLM reachable at ${LITELLM_URL} (container status check unavailable)"
+else
+    fail "LiteLLM container is NOT running — run: docker compose -f ./litellm-compose.yml up -d"
+fi
+
+if curl -sf "${LITELLM_URL}/health" > /dev/null 2>&1; then
+    pass "LiteLLM health endpoint OK at ${LITELLM_URL}"
+else
+    fail "LiteLLM health NOT reachable at ${LITELLM_URL}"
+fi
+
+LITELLM_MODELS=$(curl -sf "${LITELLM_URL}/v1/models" 2>/dev/null)
+if echo "${LITELLM_MODELS}" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); assert len(d['data'])>0" 2>/dev/null; then
+    pass "LiteLLM /v1/models lists registered models"
+else
+    fail "LiteLLM /v1/models NOT working — check: docker compose -f ./litellm-compose.yml logs -f"
 fi
 
 # --------------------------------------------------------------------------- #

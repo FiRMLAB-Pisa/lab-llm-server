@@ -29,7 +29,9 @@ sudo bash setup.sh
 5. Installs the lab knowledge MCP service on port 3001
 6. Installs the lab status dashboard on port 3002
 7. Installs SearXNG (internal meta search) and the web search MCP service on port 3003
-8. Runs a quick verification and prints a summary of all service URLs
+8. Starts Qdrant vector database on port 6333
+9. Starts LiteLLM proxy on port 4000 (timeout fix + thinking display for Roo Code)
+10. Runs a quick verification and prints a summary of all service URLs
 
 > **Tip:** The 35B model is ~24 GB. Run setup in a `tmux` session so it survives
 > disconnection: `tmux new -s setup && sudo bash setup.sh`
@@ -312,6 +314,7 @@ edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update
 | Lab Knowledge MCP | 3001 | `http://aleatico2.imago7.local:3001/sse` | Semantic search over lab SDKs/docs |
 | **Status dashboard** | **3002** | **`http://aleatico2.imago7.local:3002`** | **Live GPU/model/service status** |
 | Web Search MCP | 3003 | `http://aleatico2.imago7.local:3003/sse` | Live web search via SearXNG |
+| **LiteLLM proxy** | **4000** | **`http://aleatico2.imago7.local:4000/v1`** | **Roo Code / OpenHands LLM backend (timeout fix + thinking display)** |
 | **Qdrant** | **6333** | **`http://aleatico2.imago7.local:6333`** | **Vector DB for Roo Code codebase indexing** |
 | SearXNG | 8080 | `http://127.0.0.1:8080` (localhost only) | Meta search engine (internal) |
 
@@ -336,6 +339,13 @@ docker compose -f ~/lab-llm-server/openhands-compose.yml ps
 docker compose -f ~/lab-llm-server/openhands-compose.yml logs -f
 docker compose -f ~/lab-llm-server/openhands-compose.yml down
 docker compose -f ~/lab-llm-server/openhands-compose.yml up -d
+
+# LiteLLM proxy (port 4000 — Roo Code / OpenHands backend)
+docker compose -f ~/lab-llm-server/litellm-compose.yml ps
+docker compose -f ~/lab-llm-server/litellm-compose.yml logs -f
+docker compose -f ~/lab-llm-server/litellm-compose.yml down
+docker compose -f ~/lab-llm-server/litellm-compose.yml up -d
+# Usage dashboard: http://aleatico2.imago7.local:4000/ui
 
 # Update OpenHands image only (without touching Ollama or other services)
 bash ~/lab-llm-server/update-openhands.sh
@@ -407,7 +417,7 @@ docker compose -f ~/lab-llm-server/openhands-compose.yml up -d
 
 - All services bind to `0.0.0.0` — accessible on the trusted lab LAN and GlobalProtect VPN.
 - SearXNG binds to `127.0.0.1:8080` (localhost only) — not reachable from the network; only the web search MCP server calls it.
-- Do **not** expose ports 11434, 3000, 3001, 3002, or 3003 to the public internet.
+- Do **not** expose ports 11434, 3000, 3001, 3002, 3003, or 4000 to the public internet.
 - If `aleatico2` ever gets a public IP, add nginx basic auth in front of each service.
 - **Firewall note:** the lab firewall occasionally drops aleatico2’s internet access and requires manual re-authentication. When this happens, web search returns a connectivity error; all local tools (Roo Code, codebase search, lab knowledge) remain fully functional.
 ---

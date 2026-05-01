@@ -1,0 +1,57 @@
+# LiteLLM Proxy
+# ==============
+# Transparent OpenAI-compatible proxy between Roo Code/OpenHands and Ollama.
+#
+# Why this exists:
+#   1. Timeout — Roo's HTTP client times out while Ollama silently generates hidden
+#      chain-of-thought tokens (reasoning_effort=high).  LiteLLM holds the connection
+#      open for up to 1 hour (configured in litellm-config.yml).
+#   2. Usage dashboard — http://aleatico2.imago7.local:4000/ui
+#
+# NOTE on thinking display: LiteLLM v1.63.0+ normalises `reasoning` → `reasoning_content`
+# for supported providers (Deepseek, Anthropic, Bedrock, OpenRouter, etc.).
+# Ollama is NOT in that list — LiteLLM passes Ollama's `reasoning` field through
+# without renaming it, so Roo will not render the Thinking... block.
+# The thinking display is blocked on Roo PR #11496 (still Draft) which adds
+# `reasoning` field support to Roo's OpenAiHandler.
+# Timeout fix is the primary benefit of this proxy.
+#
+# Clients connect to:
+#   http://aleatico2.imago7.local:4000/v1   (replaces :11434/v1 for Roo Code)
+#
+# To start (admin, handled by setup.sh):
+#   docker compose -f litellm-compose.yml up -d
+#
+# To stop:
+#   docker compose -f litellm-compose.yml down
+#
+# Logs:
+#   docker compose -f litellm-compose.yml logs -f
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.63.14
+    container_name: litellm
+    restart: unless-stopped
+
+    ports:
+      # Bind to all interfaces — accessible on lab LAN and GlobalProtect VPN.
+      - "0.0.0.0:4000:4000"
+
+    volumes:
+      # Mount the proxy config read-only into the container
+      - ./litellm-config.yml:/app/config.yaml:ro
+
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+
+    extra_hosts:
+      # Allows the container to reach Ollama on the host at host.docker.internal
+      # Required on Linux (Docker 20.10+ resolves this via host-gateway)
+      - "host.docker.internal:host-gateway"
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

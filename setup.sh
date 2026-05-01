@@ -16,11 +16,11 @@ OLLAMA_KEEP_ALIVE="30m"   # unload models after 30 min idle (frees GPU)
 # lives on a separate Ollama process (port 11435) so it can never evict the
 # large inference models from VRAM.
 OLLAMA_MAX_LOADED_MODELS="1"
-# KV cache is pre-allocated for ALL parallel slots at model load time.
-# qwen3.5:27b-q8_0 has a 256k context window — with NUM_PARALLEL=3 the
-# KV cache pre-allocation is ~5 GB, keeping total VRAM to ~40 GB.
-# 3 parallel slots is realistic for this lab and keeps headroom comfortable.
-OLLAMA_NUM_PARALLEL="3"
+# Single parallel slot: one user workflow, no benefit from multiple slots.
+# With qwen3.5:27b-q8_0 (~30 GB weights), reducing from 3 to 1 slot saves
+# ~8-12 GB of KV cache pre-allocation at load time, preventing VRAM exhaustion
+# and the 20-30s KV reallocation stalls that cause Roo Code timeout errors.
+OLLAMA_NUM_PARALLEL="1"
 OPENHANDS_PULL_RETRIES="6"  # tolerate transient DNS/firewall hiccups
 OPENHANDS_PULL_DELAY_SECS="15"
 # Set to 1 to disable SSL certificate verification for HuggingFace Hub downloads.
@@ -128,13 +128,15 @@ Environment="OLLAMA_HOST=${OLLAMA_HOST}"
 Environment="OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS}"
 # Auto-unload models after KEEP_ALIVE idle time (frees GPU for scientific jobs)
 Environment="OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE}"
-# KV cache is pre-allocated per slot at model load — 3 parallel slots keeps
-# cache overhead to ~5 GB for qwen3.5:27b-q8_0's 256k context window
+# Single parallel slot — see NUM_PARALLEL comment in configuration section above
 Environment="OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL}"
 # Where model weights are stored (ensure this partition has enough space)
 Environment="OLLAMA_MODELS=${OLLAMA_MODELS_DIR}"
 # Enable Flash Attention 2 — reduces memory and speeds up prefill on A40
 Environment="OLLAMA_FLASH_ATTENTION=1"
+# Quantise the KV cache from F16 to Q8_0 — halves KV memory at negligible
+# quality cost. At 27B Q8_0 + 32k context this saves ~4 GB vs F16 default.
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 EOF
 
 sudo systemctl daemon-reload
@@ -514,7 +516,38 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
-# 9. Verify
+# 10. Start LiteLLM proxy (timeout fix + thinking display for Roo Code)
+# --------------------------------------------------------------------------- #
+info "Starting LiteLLM proxy (port 4000)..."
+LITELLM_COMPOSE="${SCRIPT_DIR}/litellm-compose.yml"
+[[ -f "${LITELLM_COMPOSE}" ]] || die "litellm-compose.yml not found at ${LITELLM_COMPOSE}"
+
+# Pull image first (may take a minute on first run)
+docker compose -f "${LITELLM_COMPOSE}" pull --quiet
+if docker compose -f "${LITELLM_COMPOSE}" up -d; then
+    info "LiteLLM proxy started on 0.0.0.0:4000."
+    info "  Roo Code base URL:  http://aleatico2.imago7.local:4000/v1"
+    info "  Usage dashboard:    http://aleatico2.imago7.local:4000/ui"
+else
+    warn "LiteLLM container failed to start. Continuing setup."
+    warn "Check logs: docker compose -f ${LITELLM_COMPOSE} logs --tail=100"
+    warn "Clients can fall back to Ollama directly at :11434/v1 until this is fixed."
+fi
+
+# Wait briefly for LiteLLM to be ready
+for i in {1..12}; do
+    if curl -sf http://127.0.0.1:4000/health > /dev/null 2>&1; then
+        info "✓ LiteLLM is healthy."
+        break
+    fi
+    sleep 5
+    if [[ $i -eq 12 ]]; then
+        warn "LiteLLM did not respond at :4000 within 60 s. Check: docker compose -f ${LITELLM_COMPOSE} logs -f"
+    fi
+done
+
+# --------------------------------------------------------------------------- #
+# 11. Verify
 # --------------------------------------------------------------------------- #
 info ""
 info "=== Setup complete. Verification ==="
@@ -528,7 +561,9 @@ nvidia-smi --query-gpu=name,memory.used,memory.free --format=csv,noheader 2>/dev
     warn "nvidia-smi not found — check GPU manually."
 
 info ""
-info "Test the API:"
+info "Test the API (via LiteLLM proxy — what Roo Code uses):"
+info "  curl http://127.0.0.1:4000/v1/models"
+info "Test Ollama directly:"
 info "  curl http://127.0.0.1:11434/api/tags"
 info ""
 info "To manually flush GPU memory before a CUDA job:"
@@ -538,5 +573,7 @@ info "OpenHands (background agent): http://aleatico2.imago7.local:3000"
 info "Lab knowledge MCP:            http://aleatico2.imago7.local:3001/sse"
 info "Lab status dashboard:          http://aleatico2.imago7.local:3002"
 info "Web search MCP:                http://aleatico2.imago7.local:3003/sse"
+info "LiteLLM proxy (Roo Code):     http://aleatico2.imago7.local:4000/v1"
+info "LiteLLM usage dashboard:       http://aleatico2.imago7.local:4000/ui"
 info ""
 info "Each lab member should run onboard.sh once from a VSCode Remote-SSH terminal."
