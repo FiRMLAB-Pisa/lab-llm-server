@@ -5,11 +5,11 @@ Replaces GitHub Copilot with fully open-source, on-premises models accessible
 to all lab members over the lab LAN and GlobalProtect VPN.
 
 **Stack:**
-- **Ollama** — serves Qwen3.5 models (LAN-accessible)
-- **Roo Code** (VSCode extension) — interactive agentic coding with plan/edit/debug modes
-- **OpenHands** — browser-based background agent (async tasks, no editor needed)
+- **llama-server** (llama.cpp) — serves Qwen3.6-35B-A3B at port 11434 (LAN-accessible, OpenAI-compatible)
+- **Roo Code** (VSCode extension) — interactive agentic coding with plan/edit/debug modes; streaming thinking tokens via `openai-compatible` provider
 - **MCP codebase search** — per-project semantic search auto-called by Roo Code
 - **Lab knowledge base** — shared index of SDKs, libraries, and docs on `/opt/lab-knowledge/`
+- **Ollama** (internal, ports 11435/11436) — serves `nomic-embed-text` (embeddings) and `starcoder2:3b` (autocomplete) only; not LAN-accessible
 
 ---
 
@@ -21,19 +21,21 @@ cd ~/lab-llm-server
 sudo bash setup.sh
 ```
 
-`setup.sh` does the following automatically (takes 20–40 min, mostly model downloads):
-1. Installs Ollama and configures it as a systemd service bound to all interfaces
-2. Pulls all models: `qwen3.5:27b-q8_0`, `qwen3.5:9b`, `nomic-embed-text`, `starcoder2:3b`
-3. Installs the `gpu-clear` script
-4. Installs Docker and starts the OpenHands background agent on port 3000
-5. Installs the lab knowledge MCP service on port 3001
-6. Installs the lab status dashboard on port 3002
-7. Installs SearXNG (internal meta search) and the web search MCP service on port 3003
-8. Starts Qdrant vector database on port 6333
-9. Starts LiteLLM proxy on port 4000 (timeout fix + thinking display for Roo Code)
-10. Runs a quick verification and prints a summary of all service URLs
+`setup.sh` does the following automatically (takes 20–40 min on first run, mostly model download):
+1. Builds or installs `llama-server` (llama.cpp) with CUDA support
+2. Downloads `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf` (~24 GB) to `/opt/llm/models/`
+3. Installs `llama-server` as a systemd service on port 11434 (LAN-accessible, OpenAI-compatible)
+4. Installs Ollama (internal only) for embeddings (`nomic-embed-text`, port 11436) and autocomplete (`starcoder2:3b`, port 11435)
+5. Stops and removes legacy containers (OpenHands, LiteLLM) if present
+6. Installs the `gpu-clear` script
+7. Installs Docker (needed for SearXNG and Qdrant)
+8. Installs the lab knowledge MCP service on port 3001
+9. Installs the lab status dashboard on port 3002
+10. Installs SearXNG (internal meta search) and the web search MCP service on port 3003
+11. Starts Qdrant vector database on port 6333
+12. Runs a quick verification and prints a summary of all service URLs
 
-> **Tip:** The 35B model is ~24 GB. Run setup in a `tmux` session so it survives
+> **Tip:** The model is ~24 GB. Run setup in a `tmux` session so it survives
 > disconnection: `tmux new -s setup && sudo bash setup.sh`
 
 ### Verify the server
@@ -94,7 +96,7 @@ project the first time you open it:
    | Field | Value |
    |---|---|
    | Embedder Provider | `Ollama` |
-   | Base URL | `http://aleatico2.imago7.local:11434` |
+   | Base URL | `http://aleatico2.imago7.local:11436` |
    | API Key | *(leave empty)* |
    | Model | `nomic-embed-text` *(type in — not a dropdown)* |
    | Model Dimension | `768` |
@@ -230,54 +232,56 @@ technical documentation.
 If you need to run a GPU-intensive job (PyTorch, TensorFlow, CUDA):
 
 1. **Book a slot** on the lab calendar and notify other users.
-2. **Before starting your job:** run `sudo gpu-clear` — immediately unloads all models from GPU.
+2. **Before starting your job:** run `sudo systemctl stop llama-server && sudo gpu-clear` — stops inference and frees all GPU memory.
 3. **Confirm GPU is free:** `nvidia-smi`
 4. **Run your job.**
-5. **After finishing:** Ollama reloads models automatically on the next LLM request.
+5. **After finishing:** `sudo systemctl start llama-server` — llama-server reloads the model automatically.
 
-> If you skip `gpu-clear`, your job may fail with "CUDA out of memory".
+> If you skip stopping llama-server, your job will fail with "CUDA out of memory" — the model occupies ~42 GB.
 
 ---
 
 ## Models and Modes
 
 | Roo Code Mode | Model | VRAM | Purpose |
-|---|---|---|
----|
-| **Orchestrator** | `qwen3.5:27b-q8_0` | ~30 GB | Meta-agent: breaks complex tasks into subtasks, delegates automatically |
-| Architect | `qwen3.5:27b-q8_0` | ~30 GB | Planning, understanding unfamiliar code |
-| Code | `qwen3.5:27b-q8_0` | ~30 GB | File edits, terminal commands, tool use |
-| Ask | `qwen3.5:9b` | ~7 GB | Quick Q&A, explanations — fast, tool-capable |
-| Debug | `qwen3.5:27b-q8_0` | ~30 GB | Tracing errors, reading tracebacks |
-| Autocomplete | `starcoder2:3b` | ~2 GB | Ghost-text tab completion (Continue.dev, port 11435) |
+|---|---|---|---|
+| **Orchestrator** | `Qwen3.6-35B-A3B` (llama-server) | ~24 GB weights + KV | Meta-agent: breaks complex tasks into subtasks, delegates automatically |
+| Architect | `Qwen3.6-35B-A3B` | ~24 GB weights + KV | Planning, understanding unfamiliar code |
+| Code | `Qwen3.6-35B-A3B` | ~24 GB weights + KV | File edits, terminal commands, tool use |
+| Ask | `Qwen3.6-35B-A3B` | ~24 GB weights + KV | Quick Q&A, explanations — fast, tool-capable |
+| Debug | `Qwen3.6-35B-A3B` | ~24 GB weights + KV | Tracing errors, reading tracebacks |
+| Autocomplete | `starcoder2:3b` (Ollama, port 11435) | ~2 GB | Ghost-text tab completion (Continue.dev) |
 
-All reasoning modes share a single model — no model-switching overhead during
-Orchestrator subagent chains. `qwen3.5:27b-q8_0` is a dense model (all 27B
-parameters active per token, Q8_0 near-full precision), significantly stronger
-for multi-step reasoning than the previous MoE 35B (which had only 3B active params/token).
+All Roo Code modes use the single `Qwen3.6-35B-A3B` MoE model served by `llama-server`.
+The model is a Mixture-of-Experts with ~3B active parameters per token at Q4_K_M quantisation.
+Thinking is streamed via `reasoning_content` (deepseek format) — visible in real time in Roo Code's chat panel.
 
-VRAM budget: ~30 GB weights + ~5 GB KV cache (3 slots, 256k ctx) + ~2 GB starcoder2:3b
-+ ~3 GB CUDA overhead = ~40 GB total, leaving ~8 GB headroom on the A40.
+VRAM budget: ~24 GB weights + ~18 GB KV cache (256K × 3 slots, q4_0) + ~2 GB starcoder2:3b
++ ~3 GB CUDA overhead ≈ 47 GB total. Tight on 48 GB A40 — if OOM at startup, reduce context to
+`-c 393216` (128K × 3) in `/opt/llm/start-llama-server.sh` and restart the service.
 
-**Multi-user:** up to 3 simultaneous requests per model slot (`OLLAMA_NUM_PARALLEL=3`).
+**Multi-user:** up to 3 simultaneous requests (`--parallel 3`).
 Requests beyond 3 are queued, not rejected. Monitor in real time: `watch -n 2 nvidia-smi`
 
 ### Updating models
 
-New Qwen3.5 releases appear every few months and bring meaningful
-quality improvements. Run the update script monthly (no service restart needed —
-Ollama picks up new versions automatically from the next request):
+When a new Qwen3.6 GGUF release appears on HuggingFace (bartowski or unsloth), update as follows:
 
 ```bash
-bash ~/lab-llm-server/update-models.sh
-```
+# Download new model file to /opt/llm/models/
+sudo curl -fL -o /opt/llm/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
+    https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
 
-The script pulls all models, shows what changed, and optionally runs `smoke-test.sh`.
+# Restart the service to pick up the new file
+sudo systemctl restart llama-server
+
+# Confirm it loaded
+curl http://127.0.0.1:11434/v1/models
+```
 
 ### Upgrading the model architecture (replacing model families)
 
-When a better model family becomes available (as happened moving from DeepSeek→Qwen3.5),
-use `migrate-models.sh` to pull new models, verify inference, then remove deprecated ones safely:
+When a better model family becomes available, use `migrate-models.sh` to pull new models, verify inference, then remove deprecated ones safely:
 
 ```bash
 # Dry-run first — see exactly what will be pulled and removed:
@@ -293,14 +297,15 @@ bash ~/lab-llm-server/smoke-test.sh
 After migration, update the workspace template and notify users to pull and reload:
 
 ```bash
-git -C ~/lab-workspace-template pull   # on aleatico2 or wherever the template lives
+git -C ~/lab-workspace-template pull
 # Users: git pull in their project repo, then F1 → Developer: Reload Window in VSCode
-# Users: set sticky model per mode once (see client README Quick Start)
 ```
 
-To switch to a specific model version (e.g. a newer `qwen3.5:27b` quantization if available),
-edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update
-`lab-workspace-template/.vscode/settings.json` and run `migrate-models.sh`.
+> **GPU sharing:** before any job that needs full VRAM, stop llama-server first:
+> `sudo systemctl stop llama-server && sudo gpu-clear`
+> After the job, restart: `sudo systemctl start llama-server`
+
+To switch to a newer quantisation of the same model or a new GGUF release, download the new file to `/opt/llm/models/`, update the path in `/opt/llm/start-llama-server.sh`, and restart the service. See the "Updating models" section above.
 
 ---
 
@@ -308,13 +313,12 @@ edit the `MODELS` array in `setup.sh` and `update-models.sh`, then update
 
 | Service | Port | URL | Purpose |
 |---|---|---|---|
-| Ollama (inference) | 11434 | `http://aleatico2.imago7.local:11434` | LLM inference — qwen3.5:27b-q8_0, qwen3.5:9b |
-| Ollama (autocomplete) | 11435 | `http://aleatico2.imago7.local:11435` | Tab autocomplete only — starcoder2:3b, isolated from inference |
-| OpenHands | 3000 | `http://aleatico2.imago7.local:3000` | Browser-based background agent |
+| **llama-server** | **11434** | **`http://aleatico2.imago7.local:11434/v1`** | **Main LLM inference — Qwen3.6-35B-A3B (Roo Code / all modes)** |
+| Ollama (embeddings) | 11436 | `127.0.0.1:11436` (internal) | Embeddings for lab knowledge + Qdrant indexing |
+| Ollama (autocomplete) | 11435 | `http://aleatico2.imago7.local:11435` | Tab autocomplete — starcoder2:3b |
 | Lab Knowledge MCP | 3001 | `http://aleatico2.imago7.local:3001/sse` | Semantic search over lab SDKs/docs |
 | **Status dashboard** | **3002** | **`http://aleatico2.imago7.local:3002`** | **Live GPU/model/service status** |
 | Web Search MCP | 3003 | `http://aleatico2.imago7.local:3003/sse` | Live web search via SearXNG |
-| **LiteLLM proxy** | **4000** | **`http://aleatico2.imago7.local:4000/v1`** | **Roo Code / OpenHands LLM backend (timeout fix + thinking display)** |
 | **Qdrant** | **6333** | **`http://aleatico2.imago7.local:6333`** | **Vector DB for Roo Code codebase indexing** |
 | SearXNG | 8080 | `http://127.0.0.1:8080` (localhost only) | Meta search engine (internal) |
 
@@ -324,7 +328,12 @@ Do **not** expose these ports to the public internet.
 ### Management commands
 
 ```bash
-# Ollama (inference — port 11434)
+# llama-server (main inference — port 11434)
+sudo systemctl status llama-server
+sudo systemctl restart llama-server
+journalctl -fu llama-server
+
+# Ollama (embeddings — port 11436, internal)
 sudo systemctl status ollama
 sudo systemctl restart ollama
 journalctl -fu ollama
@@ -333,22 +342,6 @@ journalctl -fu ollama
 sudo systemctl status ollama-autocomplete
 sudo systemctl restart ollama-autocomplete
 journalctl -fu ollama-autocomplete
-
-# OpenHands
-docker compose -f ~/lab-llm-server/openhands-compose.yml ps
-docker compose -f ~/lab-llm-server/openhands-compose.yml logs -f
-docker compose -f ~/lab-llm-server/openhands-compose.yml down
-docker compose -f ~/lab-llm-server/openhands-compose.yml up -d
-
-# LiteLLM proxy (port 4000 — Roo Code / OpenHands backend)
-docker compose -f ~/lab-llm-server/litellm-compose.yml ps
-docker compose -f ~/lab-llm-server/litellm-compose.yml logs -f
-docker compose -f ~/lab-llm-server/litellm-compose.yml down
-docker compose -f ~/lab-llm-server/litellm-compose.yml up -d
-# Usage dashboard: http://aleatico2.imago7.local:4000/ui
-
-# Update OpenHands image only (without touching Ollama or other services)
-bash ~/lab-llm-server/update-openhands.sh
 
 # Lab knowledge MCP server
 sudo systemctl status lab-knowledge
@@ -370,8 +363,10 @@ docker compose -f ~/lab-llm-server/searxng-compose.yml logs -f
 # If internet connectivity is restored after firewall re-auth:
 docker compose -f ~/lab-llm-server/searxng-compose.yml restart
 
-# Free GPU before a scientific job
-sudo gpu-clear
+# Stop llama-server and free GPU before a scientific job
+sudo systemctl stop llama-server && sudo gpu-clear
+# Restart after job completes
+sudo systemctl start llama-server
 ```
 
 ---
@@ -382,10 +377,9 @@ All services are configured to **restart automatically** on crash and on server 
 
 | Event | What happens |
 |---|---|
-| Ollama crashes | systemd restarts it within 5 s |
-| OpenHands crashes | Docker restarts it within 5 s |
+| llama-server crashes | systemd restarts it within 10 s |
 | Lab Knowledge / Status crash | systemd restarts within 5 s |
-| Server reboots | All services up within ~30 s of boot |
+| Server reboots | All services up within ~60 s of boot (model load takes ~30 s) |
 
 ### Force-restart everything (e.g. after a hang or full stack issue)
 
@@ -398,17 +392,17 @@ Restarts all five services in order and prints their status. Takes under 10 seco
 ### Restart a single service
 
 ```bash
-sudo systemctl restart ollama          # most common — fixes hung model
+sudo systemctl restart llama-server     # most common — clears hung model state
 sudo systemctl restart lab-knowledge
 sudo systemctl restart lab-status
-docker compose -f ~/lab-llm-server/openhands-compose.yml restart
 ```
 
 ### If Docker itself is stuck
 
 ```bash
 sudo systemctl restart docker
-docker compose -f ~/lab-llm-server/openhands-compose.yml up -d
+docker compose -f ~/lab-llm-server/searxng-compose.yml up -d
+docker compose -f ~/lab-llm-server/qdrant-compose.yml up -d
 ```
 
 ---
@@ -417,7 +411,7 @@ docker compose -f ~/lab-llm-server/openhands-compose.yml up -d
 
 - All services bind to `0.0.0.0` — accessible on the trusted lab LAN and GlobalProtect VPN.
 - SearXNG binds to `127.0.0.1:8080` (localhost only) — not reachable from the network; only the web search MCP server calls it.
-- Do **not** expose ports 11434, 3000, 3001, 3002, 3003, or 4000 to the public internet.
+- Do **not** expose ports 11434, 3001, 3002, 3003, or 6333 to the public internet.
 - If `aleatico2` ever gets a public IP, add nginx basic auth in front of each service.
 - **Firewall note:** the lab firewall occasionally drops aleatico2’s internet access and requires manual re-authentication. When this happens, web search returns a connectivity error; all local tools (Roo Code, codebase search, lab knowledge) remain fully functional.
 ---
@@ -448,7 +442,6 @@ The hostname `aleatico2.imago7.local` is referenced in **three places**. If the 
 |---|---|
 | `lab-workspace-template/.vscode/settings.json` | `openAiBaseUrl` + all three MCP server `url` fields |
 | `lab-llm-client/check-connectivity.sh` | All server hostnames |
-| `lab-llm-server/openhands-compose.yml` | `SANDBOX_RUNTIME_CONTAINER_IMAGE` env if host-referenced |
 
 > **Simplest alternative:** configure DNS/DHCP so the new machine answers to the same
 > `aleatico2.imago7.local` name — then no file changes are needed.

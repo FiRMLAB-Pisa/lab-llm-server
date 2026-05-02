@@ -6,15 +6,10 @@
 # =============================================================================
 set -uo pipefail
 
-OLLAMA_URL="http://127.0.0.1:11434"
-LITELLM_URL="http://127.0.0.1:4000"
-OPENHANDS_URL="http://127.0.0.1:3000"
-
-REQUIRED_MODELS=(
-    "qwen3.5:27b-q8_0"
-    "qwen3.5:9b"
-    "nomic-embed-text"
-)
+LLAMA_URL="http://127.0.0.1:11434"
+OLLAMA_EMBED_URL="http://127.0.0.1:11436"
+OLLAMA_AUTOCOMPLETE_URL="http://127.0.0.1:11435"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PASS=0; FAIL=0
 pass() { echo "  [PASS] $*"; (( PASS++ )) || true; }
@@ -22,7 +17,65 @@ fail() { echo "  [FAIL] $*"; (( FAIL++ )) || true; }
 section() { echo ""; echo "=== $* ==="; }
 
 # --------------------------------------------------------------------------- #
-section "Ollama service"
+section "llama-server (main inference, port 11434)"
+# --------------------------------------------------------------------------- #
+
+if systemctl is-active --quiet llama-server; then
+    pass "llama-server.service is active"
+else
+    fail "llama-server.service is NOT active — run: sudo systemctl start llama-server"
+fi
+
+if curl -sf "${LLAMA_URL}/health" > /dev/null 2>&1; then
+    pass "llama-server /health reachable at ${LLAMA_URL}"
+else
+    fail "llama-server /health not reachable at ${LLAMA_URL} — may still be loading model"
+fi
+
+if ss -tln | grep -Eq '0\.0\.0\.0:11434|\*:11434|\[::\]:11434'; then
+    pass "llama-server listening on all interfaces for :11434 (LAN/VPN accessible)"
+else
+    fail "llama-server is NOT listening on 0.0.0.0:11434 — check: journalctl -u llama-server -n 50"
+fi
+
+# --------------------------------------------------------------------------- #
+section "llama-server OpenAI-compatible endpoint"
+# --------------------------------------------------------------------------- #
+
+MODELS_RESP=$(curl -sf "${LLAMA_URL}/v1/models" 2>/dev/null)
+if echo "${MODELS_RESP}" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); assert len(d['data'])>0" 2>/dev/null; then
+    MODEL_ID=$(echo "${MODELS_RESP}" | python3 -c \
+        "import sys,json; d=json.load(sys.stdin); print(d['data'][0]['id'])" 2>/dev/null)
+    pass "llama-server /v1/models OK — model: ${MODEL_ID}"
+else
+    fail "llama-server /v1/models NOT working — check: journalctl -u llama-server -n 50"
+fi
+
+# --------------------------------------------------------------------------- #
+section "Inference — chat completion with reasoning (short prompt)"
+# --------------------------------------------------------------------------- #
+
+CHAT_RESP=$(curl -sf -X POST "${LLAMA_URL}/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"'${MODEL_ID:-qwen3.6-35b}'","stream":false,"messages":[{"role":"user","content":"/think\nReply with exactly: OK"}]}' \
+    2>/dev/null)
+if echo "${CHAT_RESP}" | python3 -c \
+    "import sys,json; r=json.load(sys.stdin); assert r['choices'][0]['message']['content']" 2>/dev/null; then
+    pass "Chat completion OK"
+    # Check reasoning_content field is present (deepseek format)
+    if echo "${CHAT_RESP}" | python3 -c \
+        "import sys,json; r=json.load(sys.stdin); c=r['choices'][0]['message']; assert 'reasoning_content' in c" 2>/dev/null; then
+        pass "reasoning_content field present in response (deepseek reasoning format active)"
+    else
+        fail "reasoning_content field missing — check --reasoning-format deepseek flag in llama-server startup"
+    fi
+else
+    fail "Chat completion FAILED — check: journalctl -u llama-server -n 50"
+fi
+
+# --------------------------------------------------------------------------- #
+section "Ollama embedding instance (port 11436, internal only)"
 # --------------------------------------------------------------------------- #
 
 if systemctl is-active --quiet ollama; then
@@ -31,59 +84,24 @@ else
     fail "ollama.service is NOT active — run: sudo systemctl start ollama"
 fi
 
-if curl -sf "${OLLAMA_URL}/api/tags" > /dev/null; then
-    pass "Ollama API reachable at ${OLLAMA_URL}"
+if curl -sf "${OLLAMA_EMBED_URL}/api/tags" > /dev/null 2>&1; then
+    pass "Ollama embedding API reachable at ${OLLAMA_EMBED_URL}"
 else
-    fail "Ollama API not reachable at ${OLLAMA_URL}"
+    fail "Ollama embedding API not reachable at ${OLLAMA_EMBED_URL}"
 fi
 
-# Check network binding (must be 0.0.0.0, not 127.0.0.1)
-if ss -tln | grep -Eq '(:|\*)11434\b'; then
-    if ss -tln | grep -Eq '0\.0\.0\.0:11434|\*:11434|\[::\]:11434'; then
-        pass "Ollama listening on all interfaces for :11434 (LAN/VPN accessible)"
-    else
-        fail "Ollama is listening, but not on all interfaces for :11434"
-    fi
+# Verify it is NOT LAN-accessible (must be 127.0.0.1 only)
+if ss -tln | grep -Eq '0\.0\.0\.0:11436|\*:11436'; then
+    fail "Ollama embedding instance is exposed on all interfaces — should be 127.0.0.1:11436 only"
 else
-    fail "Ollama is NOT listening on :11434 — check systemd drop-in config"
+    pass "Ollama embedding instance correctly bound to 127.0.0.1:11436 (internal only)"
 fi
 
 # --------------------------------------------------------------------------- #
-section "Models"
+section "Embeddings (nomic-embed-text, port 11436)"
 # --------------------------------------------------------------------------- #
 
-AVAILABLE=$(curl -sf "${OLLAMA_URL}/api/tags" | python3 -c \
-    "import sys,json; tags=json.load(sys.stdin).get('models', []); [print(m.get('name','')) for m in tags]" 2>/dev/null)
-
-for model in "${REQUIRED_MODELS[@]}"; do
-    if echo "${AVAILABLE}" | grep -Eq "^${model}(:|$)"; then
-        pass "Model available: ${model}"
-    else
-        fail "Model NOT available: ${model} — run: ollama pull ${model}"
-    fi
-done
-
-# --------------------------------------------------------------------------- #
-section "Inference — chat completion (short prompt)"
-# --------------------------------------------------------------------------- #
-
-for model in "qwen3.5:27b-q8_0" "qwen3.5:9b"; do
-    RESP=$(curl -sf -X POST "${OLLAMA_URL}/api/chat" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"${model}\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: OK\"}]}" \
-        2>/dev/null)
-    if echo "${RESP}" | python3 -c "import sys,json; r=json.load(sys.stdin); assert r['message']['content']" 2>/dev/null; then
-        pass "Inference OK: ${model}"
-    else
-        fail "Inference FAILED: ${model}"
-    fi
-done
-
-# --------------------------------------------------------------------------- #
-section "Embeddings (nomic-embed-text)"
-# --------------------------------------------------------------------------- #
-
-EMBED_RESP=$(curl -sf -X POST "${OLLAMA_URL}/api/embed" \
+EMBED_RESP=$(curl -sf -X POST "${OLLAMA_EMBED_URL}/api/embed" \
     -H "Content-Type: application/json" \
     -d '{"model":"nomic-embed-text","input":["test"]}' 2>/dev/null)
 DIM=$(echo "${EMBED_RESP}" | python3 -c \
@@ -91,52 +109,12 @@ DIM=$(echo "${EMBED_RESP}" | python3 -c \
 if [[ -n "${DIM}" && "${DIM}" -gt 0 ]]; then
     pass "Embeddings OK: nomic-embed-text (dim=${DIM})"
 else
-    fail "Embeddings FAILED: nomic-embed-text"
-fi
-
-# --------------------------------------------------------------------------- #
-section "OpenAI-compatible endpoint (used by Roo Code)"
-# --------------------------------------------------------------------------- #
-
-OAI_RESP=$(curl -sf "${OLLAMA_URL}/v1/models" 2>/dev/null)
-if echo "${OAI_RESP}" | python3 -c \
-    "import sys,json; d=json.load(sys.stdin); assert len(d['data'])>0" 2>/dev/null; then
-    pass "OpenAI-compatible /v1/models endpoint OK"
-else
-    fail "OpenAI-compatible endpoint NOT working"
-fi
-
-# --------------------------------------------------------------------------- #
-section "LiteLLM proxy (Roo Code / OpenHands backend, port 4000)"
-# --------------------------------------------------------------------------- #
-
-if docker compose -f "$(dirname "$0")/litellm-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
-    pass "LiteLLM container is running"
-elif curl -sf "${LITELLM_URL}/health" > /dev/null 2>&1; then
-    pass "LiteLLM reachable at ${LITELLM_URL} (container status check unavailable)"
-else
-    fail "LiteLLM container is NOT running — run: docker compose -f ./litellm-compose.yml up -d"
-fi
-
-if curl -sf "${LITELLM_URL}/health" > /dev/null 2>&1; then
-    pass "LiteLLM health endpoint OK at ${LITELLM_URL}"
-else
-    fail "LiteLLM health NOT reachable at ${LITELLM_URL}"
-fi
-
-LITELLM_MODELS=$(curl -sf "${LITELLM_URL}/v1/models" 2>/dev/null)
-if echo "${LITELLM_MODELS}" | python3 -c \
-    "import sys,json; d=json.load(sys.stdin); assert len(d['data'])>0" 2>/dev/null; then
-    pass "LiteLLM /v1/models lists registered models"
-else
-    fail "LiteLLM /v1/models NOT working — check: docker compose -f ./litellm-compose.yml logs -f"
+    fail "Embeddings FAILED: nomic-embed-text — run: OLLAMA_HOST=127.0.0.1:11436 ollama pull nomic-embed-text"
 fi
 
 # --------------------------------------------------------------------------- #
 section "Ollama autocomplete instance (starcoder2:3b, port 11435)"
 # --------------------------------------------------------------------------- #
-
-AUTOCOMPLETE_URL="http://127.0.0.1:11435"
 
 if systemctl is-active --quiet ollama-autocomplete; then
     pass "ollama-autocomplete.service is active"
@@ -144,13 +122,13 @@ else
     fail "ollama-autocomplete.service is NOT active — run: sudo systemctl start ollama-autocomplete"
 fi
 
-if curl -sf "${AUTOCOMPLETE_URL}/api/tags" > /dev/null 2>&1; then
+if curl -sf "${OLLAMA_AUTOCOMPLETE_URL}/api/tags" > /dev/null 2>&1; then
     pass "Autocomplete Ollama API reachable at :11435"
 else
     fail "Autocomplete Ollama not reachable at :11435 — check: journalctl -u ollama-autocomplete -n 50"
 fi
 
-AUTOCOMPLETE_MODELS=$(curl -sf "${AUTOCOMPLETE_URL}/api/tags" 2>/dev/null | \
+AUTOCOMPLETE_MODELS=$(curl -sf "${OLLAMA_AUTOCOMPLETE_URL}/api/tags" 2>/dev/null | \
     python3 -c "import sys,json; tags=json.load(sys.stdin).get('models',[]); [print(m.get('name','')) for m in tags]" 2>/dev/null)
 if echo "${AUTOCOMPLETE_MODELS}" | grep -Eq "^starcoder2:3b(:|$)"; then
     pass "starcoder2:3b available on autocomplete instance"
@@ -159,23 +137,11 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
-section "OpenHands"
+section "Docker"
 # --------------------------------------------------------------------------- #
 
 if command -v docker &>/dev/null; then
-    pass "Docker installed"
-    if docker compose -f "$(dirname "$0")/openhands-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
-        pass "OpenHands container is running"
-    elif curl -sf "${OPENHANDS_URL}" > /dev/null; then
-        pass "OpenHands reachable at ${OPENHANDS_URL} (container status check unavailable)"
-    else
-        fail "OpenHands container is NOT running — run: docker compose -f ./openhands-compose.yml up -d"
-    fi
-    if curl -sf "${OPENHANDS_URL}" > /dev/null; then
-        pass "OpenHands UI reachable at ${OPENHANDS_URL}"
-    else
-        fail "OpenHands UI not reachable at ${OPENHANDS_URL} (container may still be starting)"
-    fi
+    pass "Docker installed ($(docker --version))"
 else
     fail "Docker not installed — run setup.sh"
 fi
@@ -183,8 +149,6 @@ fi
 # --------------------------------------------------------------------------- #
 section "Web Search (SearXNG + web search MCP)"
 # --------------------------------------------------------------------------- #
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if docker compose -f "${SCRIPT_DIR}/searxng-compose.yml" ps --status running --services 2>/dev/null | grep -q .; then
     pass "SearXNG container is running"
 elif curl -sf 'http://127.0.0.1:8080/search?q=test&format=json' > /dev/null; then

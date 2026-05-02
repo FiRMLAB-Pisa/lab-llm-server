@@ -10,28 +10,33 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # --------------------------------------------------------------------------- #
 # Configuration — edit these if needed
 # --------------------------------------------------------------------------- #
-OLLAMA_MODELS_DIR="/var/lib/ollama/models"   # where model weights are stored
-OLLAMA_KEEP_ALIVE="30m"   # unload models after 30 min idle (frees GPU)
-# Only 1 large model loaded at a time on the main instance — starcoder2:3b
-# lives on a separate Ollama process (port 11435) so it can never evict the
-# large inference models from VRAM.
-OLLAMA_MAX_LOADED_MODELS="1"
-# Single parallel slot: one user workflow, no benefit from multiple slots.
-# With qwen3.5:27b-q8_0 (~30 GB weights), reducing from 3 to 1 slot saves
-# ~8-12 GB of KV cache pre-allocation at load time, preventing VRAM exhaustion
-# and the 20-30s KV reallocation stalls that cause Roo Code timeout errors.
+# llama-server (main inference backend, port 11434)
+# Model: Qwen3.6 35B A3B MoE, Q4_K_M quantisation (~24 GB weights)
+# Context: 256K × 3 parallel slots = 786432 tokens total
+# KV cache quantised to q4_0 (halves KV VRAM vs F16 default)
+# Flash attention enabled to reduce VRAM spikes at long context
+# Reasoning: --reasoning-format deepseek puts thinking in reasoning_content,
+#   which Roo Code openai-compatible provider (v3.18+) streams natively.
+LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-llama-server}"
+LLAMA_MODEL_PATH="${LLAMA_MODEL_PATH:-/opt/llm/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf}"
+LLAMA_PORT="11434"
+LLAMA_CONTEXT="786432"   # 256K × 3 parallel slots
+LLAMA_PARALLEL="3"       # 3 concurrent users; requests beyond 3 are queued
+
+# Ollama is kept only for:
+#   - nomic-embed-text  (Roo Code codebase indexing via Qdrant)
+#   - starcoder2:3b     (tab autocomplete on port 11435)
+# It is bound to 127.0.0.1 only (not LAN-accessible) to avoid port conflicts.
+OLLAMA_MODELS_DIR="/var/lib/ollama/models"
+OLLAMA_HOST="127.0.0.1:11436"   # internal-only; embeddings + autocomplete only
+OLLAMA_MAX_LOADED_MODELS="2"    # nomic-embed-text + starcoder2:3b
 OLLAMA_NUM_PARALLEL="1"
-OPENHANDS_PULL_RETRIES="6"  # tolerate transient DNS/firewall hiccups
-OPENHANDS_PULL_DELAY_SECS="15"
+
 # Set to 1 to disable SSL certificate verification for HuggingFace Hub downloads.
 # Use this only if your lab network intercepts HTTPS with a self-signed certificate.
 # WARNING: This disables SSL verification and is a security risk. Only use in trusted
 # internal lab networks, never on machines exposed to the internet.
 DISABLE_SSL_VERIFY_FOR_HF="${DISABLE_SSL_VERIFY_FOR_HF:-0}"
-# Bind to all interfaces so every lab server and VPN user can reach Ollama
-# directly at http://aleatico2.imago7.local:11434 — no tunnel needed.
-# This is safe on a trusted internal lab network (GlobalProtect VPN).
-OLLAMA_HOST="0.0.0.0:11434"
 
 # Optional pre-fetched asset cache (populated by prefetch-llm-assets.sh run on
 # a fast machine and rsync'd here).  Create the directory on aleatico2 with:
@@ -39,19 +44,10 @@ OLLAMA_HOST="0.0.0.0:11434"
 # Leave empty to always download from the internet.
 PRELOAD_DIR="/srv/llm-cache"
 
-# Models to pull (Ollama registry tags)
-# qwen3.5:27b-q8_0  → All reasoning modes (Orchestrator/Architect/Code/Debug)
-#                      Dense 27B model, all parameters active per token, Q8_0 near-full precision
-#                      (~30 GB VRAM, 256k ctx) — replaces both qwen3.5:35b (MoE) and devstral
-#                      The 35b tag was a MoE model with only 3B active params/token;
-#                      27b-q8_0 is denser and significantly stronger for multi-step reasoning
-# qwen3.5:9b         → Ask mode (~7 GB VRAM, Q4_K_M, 256k ctx) — fast Q&A, no file edits
-# nomic-embed-text   → Local codebase embeddings for Roo Code codebase indexing
-#                      (~300 MB, runs on CPU — does not use the A40)
+# Models to pull (Ollama registry tags — embedding + autocomplete only)
+# nomic-embed-text   → Roo Code codebase indexing via Qdrant (~300 MB, CPU)
 # starcoder2:3b      → Tab autocomplete (FIM, ~2 GB VRAM, ~150 ms latency, port 11435)
-MODELS=(
-    "qwen3.5:27b-q8_0"
-    "qwen3.5:9b"
+OLLAMA_MODELS=(
     "nomic-embed-text"
     "starcoder2:3b"
 )
@@ -81,9 +77,161 @@ install_python_venv_deps() {
 }
 
 # --------------------------------------------------------------------------- #
-# 1. Install Ollama
+# 1. Install llama-server (main inference backend)
 # --------------------------------------------------------------------------- #
-info "Installing Ollama..."
+info "Setting up llama-server (main inference backend)..."
+
+# Check if llama-server is already available in PATH or at a standard location.
+LLAMA_FOUND=0
+for candidate in "${LLAMA_SERVER_BIN}" /usr/local/bin/llama-server /opt/llama.cpp/build/bin/llama-server; do
+    if [[ -x "${candidate}" ]]; then
+        info "Found llama-server at ${candidate}."
+        LLAMA_SERVER_BIN="${candidate}"
+        LLAMA_FOUND=1
+        break
+    fi
+done
+
+if [[ "${LLAMA_FOUND}" -eq 0 ]]; then
+    require_cmd cmake
+    require_cmd make
+    info "llama-server not found. Building llama.cpp from source with CUDA support..."
+    BUILD_DIR="/opt/llama.cpp"
+    sudo mkdir -p "${BUILD_DIR}"
+    sudo chown "${USER}:${USER}" "${BUILD_DIR}"
+    if [[ ! -d "${BUILD_DIR}/.git" ]]; then
+        git clone --depth 1 https://github.com/ggerganov/llama.cpp "${BUILD_DIR}"
+    else
+        git -C "${BUILD_DIR}" pull --ff-only
+    fi
+    cmake -B "${BUILD_DIR}/build" -S "${BUILD_DIR}" -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+    cmake --build "${BUILD_DIR}/build" --config Release -j"$(nproc)"
+    sudo cp "${BUILD_DIR}/build/bin/llama-server" /usr/local/bin/llama-server
+    sudo chmod +x /usr/local/bin/llama-server
+    LLAMA_SERVER_BIN="/usr/local/bin/llama-server"
+    info "llama-server built and installed to /usr/local/bin/llama-server"
+fi
+
+# Verify GPU is visible
+info "Verifying llama-server GPU detection..."
+if "${LLAMA_SERVER_BIN}" --version 2>&1 | grep -qi "cuda\|gpu"; then
+    info "✓ llama-server reports CUDA support."
+elif nvidia-smi &>/dev/null; then
+    info "GPU found via nvidia-smi; llama-server CUDA support assumed (--version silent on GPU)."
+else
+    warn "Could not confirm GPU detection. llama-server will still run but may fall back to CPU."
+fi
+
+# --------------------------------------------------------------------------- #
+# 1b. Download Qwen3.6-35B-A3B-UD-Q4_K_M model
+# --------------------------------------------------------------------------- #
+info "Checking for Qwen3.6 model..."
+sudo mkdir -p "$(dirname "${LLAMA_MODEL_PATH}")"
+if [[ -f "${LLAMA_MODEL_PATH}" ]]; then
+    info "Model already present at ${LLAMA_MODEL_PATH}. Skipping download."
+else
+    require_cmd curl
+    info "Downloading Qwen3.6-35B-A3B-UD-Q4_K_M.gguf from HuggingFace (unsloth)..."
+    HF_URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    CURL_FLAGS="-fL --progress-bar"
+    if [[ "${DISABLE_SSL_VERIFY_FOR_HF}" == "1" ]]; then
+        CURL_FLAGS="${CURL_FLAGS} --insecure"
+        warn "SSL verification disabled for HuggingFace download (DISABLE_SSL_VERIFY_FOR_HF=1)."
+    fi
+    sudo curl ${CURL_FLAGS} -o "${LLAMA_MODEL_PATH}" "${HF_URL}"
+    info "Model downloaded to ${LLAMA_MODEL_PATH}."
+fi
+
+# --------------------------------------------------------------------------- #
+# 1c. Install llama-server systemd service
+# --------------------------------------------------------------------------- #
+info "Installing llama-server systemd service..."
+sudo tee /opt/llm/start-llama-server.sh > /dev/null <<EOF
+#!/bin/bash
+# llama-server startup script — managed by lab LLM setup
+# Model:   Qwen3.6-35B-A3B-UD-Q4_K_M (MoE, ~24 GB weights at Q4_K_M)
+# Context: 256K × 3 parallel slots = 786432 tokens (q4_0 KV cache)
+# VRAM budget: ~24 GB weights + ~18 GB KV cache at 786k = ~42 GB + 3 GB overhead ≈ 45 GB
+# Exposed: 0.0.0.0:11434 (OpenAI-compatible, LAN/VPN accessible)
+
+exec ${LLAMA_SERVER_BIN} \\
+  -m ${LLAMA_MODEL_PATH} \\
+  -c ${LLAMA_CONTEXT} \\
+  --parallel ${LLAMA_PARALLEL} \\
+  -ngl 99 \\
+  --flash-attn \\
+  --no-mmap \\
+  --cache-type-k q4_0 \\
+  --cache-type-v q4_0 \\
+  --jinja \\
+  --chat-template-kwargs '{"enable_thinking":true,"preserve_thinking":true}' \\
+  --cache-ram 8192 \\
+  --reasoning-format deepseek \\
+  --temp 0.6 \\
+  --top-k 20 \\
+  --top-p 0.95 \\
+  --batch-size 512 \\
+  --ubatch-size 512 \\
+  --host 0.0.0.0 \\
+  --port ${LLAMA_PORT}
+EOF
+sudo chmod +x /opt/llm/start-llama-server.sh
+
+sudo tee /etc/systemd/system/llama-server.service > /dev/null <<'SVCEOF'
+[Unit]
+Description=llama-server — local LLM inference (Qwen3.6-35B-A3B)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/llm/start-llama-server.sh
+Restart=always
+RestartSec=10
+# Allow large VRAM allocations
+LimitMEMLOCK=infinity
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable llama-server
+sudo systemctl restart llama-server
+info "llama-server service enabled and (re)started."
+
+# Wait for llama-server to be ready
+info "Waiting for llama-server to be ready (may take ~30s on first load)..."
+for i in {1..30}; do
+    if curl -sf "http://127.0.0.1:${LLAMA_PORT}/health" > /dev/null 2>&1; then
+        info "✓ llama-server is ready."
+        break
+    fi
+    sleep 3
+    if [[ $i -eq 30 ]]; then
+        warn "llama-server did not respond in time. Check: journalctl -u llama-server -n 50"
+    fi
+done
+
+# Verify binding to 0.0.0.0:11434
+if ss -tlnp 2>/dev/null | grep -q "0.0.0.0:${LLAMA_PORT}"; then
+    info "✓ llama-server bound to 0.0.0.0:${LLAMA_PORT} (LAN/VPN accessible)"
+else
+    warn "llama-server not yet bound to 0.0.0.0:${LLAMA_PORT} — may still be loading the model."
+fi
+
+# Print VRAM usage after load
+info "GPU VRAM after llama-server load:"
+nvidia-smi --query-gpu=name,memory.used,memory.free,memory.total \
+    --format=csv,noheader 2>/dev/null || warn "nvidia-smi not found."
+
+# --------------------------------------------------------------------------- #
+# 1d. Install Ollama (embedding + autocomplete only, internal port 11436)
+# --------------------------------------------------------------------------- #
+info "Installing Ollama (embedding + autocomplete backend, port 11436)..."
 OLLAMA_CACHED_BIN="${PRELOAD_DIR}/ollama"
 if command -v ollama &>/dev/null && ollama --version &>/dev/null 2>&1; then
     CURRENT_VER=$(ollama --version 2>/dev/null | awk '{print $NF}')
@@ -101,15 +249,13 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
-# 2. Configure Ollama via systemd drop-in
+# 2. Configure Ollama via systemd drop-in (internal only, port 11436)
 # --------------------------------------------------------------------------- #
-info "Configuring Ollama systemd service..."
+info "Configuring Ollama systemd service (embeddings + autocomplete, port 11436)..."
 DROPIN_DIR="/etc/systemd/system/ollama.service.d"
 sudo mkdir -p "${DROPIN_DIR}"
 
 # Ensure Ollama model directory exists and is writable by the service user.
-# Some fresh installs do not pre-create /var/lib/ollama, causing startup to fail
-# with: "permission denied: mkdir /var/lib/ollama".
 if ! getent passwd ollama >/dev/null; then
     info "Creating system user 'ollama'..."
     sudo useradd -r -s /usr/sbin/nologin -U ollama
@@ -120,29 +266,23 @@ sudo chmod 750 "$(dirname "${OLLAMA_MODELS_DIR}")"
 
 sudo tee "${DROPIN_DIR}/override.conf" > /dev/null <<EOF
 # Ollama lab configuration — managed by lab LLM setup
+# Ollama serves embeddings (nomic-embed-text) and autocomplete (starcoder2:3b) only.
+# Main inference is handled by llama-server on port 11434.
+# Bound to 127.0.0.1:11436 — not LAN-accessible (internal use only).
 [Service]
-# Bind to all interfaces so every lab server and VPN client can reach the API
-# at http://aleatico2.imago7.local:11434 — no SSH tunnel needed.
 Environment="OLLAMA_HOST=${OLLAMA_HOST}"
-# Only one large inference model loaded at a time (starcoder2:3b is on port 11435)
 Environment="OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS}"
-# Auto-unload models after KEEP_ALIVE idle time (frees GPU for scientific jobs)
-Environment="OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE}"
-# Single parallel slot — see NUM_PARALLEL comment in configuration section above
+Environment="OLLAMA_KEEP_ALIVE=30m"
 Environment="OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL}"
-# Where model weights are stored (ensure this partition has enough space)
 Environment="OLLAMA_MODELS=${OLLAMA_MODELS_DIR}"
-# Enable Flash Attention 2 — reduces memory and speeds up prefill on A40
 Environment="OLLAMA_FLASH_ATTENTION=1"
-# Quantise the KV cache from F16 to Q8_0 — halves KV memory at negligible
-# quality cost. At 27B Q8_0 + 32k context this saves ~4 GB vs F16 default.
 Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 EOF
 
 sudo systemctl daemon-reload
 sudo systemctl enable ollama
 sudo systemctl restart ollama
-info "Ollama service configured and (re)started."
+info "Ollama service configured and (re)started on port 11436."
 
 # --------------------------------------------------------------------------- #
 # 2b. Install dedicated autocomplete Ollama instance (port 11435)
@@ -170,38 +310,62 @@ for i in {1..15}; do
     fi
 done
 
-# Wait for Ollama to be ready
-info "Waiting for Ollama to be ready..."
+# Wait for Ollama (embedding instance) to be ready
+info "Waiting for Ollama embedding instance to be ready..."
 for i in {1..15}; do
-    if curl -sf http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
-        info "Ollama is ready."
+    if curl -sf http://127.0.0.1:11436/api/tags > /dev/null 2>&1; then
+        info "Ollama embedding instance is ready."
         break
     fi
     sleep 2
     if [[ $i -eq 15 ]]; then
-        die "Ollama did not start in time. Check: journalctl -u ollama -n 50"
+        die "Ollama embedding instance did not start in time. Check: journalctl -u ollama -n 50"
     fi
 done
 
-# Verify binding to 0.0.0.0:11434 (required for LAN access)
-if ss -tlnp 2>/dev/null | grep -q "0.0.0.0:11434"; then
-    info "✓ Ollama bound to 0.0.0.0:11434 (LAN/VPN accessible)"
+# Verify Ollama embedding instance is on 127.0.0.1:11436 (must NOT be LAN-accessible)
+if ss -tlnp 2>/dev/null | grep -q "127.0.0.1:11436"; then
+    info "✓ Ollama embedding instance bound to 127.0.0.1:11436 (internal only)"
 else
-    warn "Ollama not bound to 0.0.0.0:11434 — it's only on 127.0.0.1"
-    warn "Attempting to restart Ollama with explicit OLLAMA_HOST..."
-    sudo systemctl stop ollama
-    sleep 1
-    sudo OLLAMA_HOST=0.0.0.0:11434 systemctl start ollama
-    sleep 2
-    if ss -tlnp 2>/dev/null | grep -q "0.0.0.0:11434"; then
-        info "✓ Ollama now bound to 0.0.0.0:11434"
-    else
-        warn "Ollama binding still not working. This may be a network configuration issue."
-    fi
+    warn "Ollama embedding instance not bound to 127.0.0.1:11436 — check systemd drop-in config"
 fi
 
 # --------------------------------------------------------------------------- #
-# 3. Install gpu-clear script
+# 3. Cleanup legacy services (OpenHands, LiteLLM)
+# --------------------------------------------------------------------------- #
+info "Stopping and removing legacy services (OpenHands, LiteLLM)..."
+
+# Stop and disable OpenHands if running
+if docker compose -f "${SCRIPT_DIR}/openhands-compose.yml" ps --services 2>/dev/null | grep -q .; then
+    info "Stopping OpenHands containers..."
+    docker compose -f "${SCRIPT_DIR}/openhands-compose.yml" down --remove-orphans 2>/dev/null || true
+fi
+# Remove OpenHands images to free disk space
+for img in docker.all-hands.dev/all-hands-ai/runtime docker.all-hands.dev/all-hands-ai/openhands; do
+    if docker image ls --format '{{.Repository}}' 2>/dev/null | grep -q "${img}"; then
+        info "Removing OpenHands image: ${img}"
+        docker image rm "${img}" 2>/dev/null || true
+    fi
+done
+
+# Stop and remove LiteLLM if running
+if [[ -f "${SCRIPT_DIR}/litellm-compose.yml" ]]; then
+    if docker compose -f "${SCRIPT_DIR}/litellm-compose.yml" ps --services 2>/dev/null | grep -q .; then
+        info "Stopping LiteLLM containers..."
+        docker compose -f "${SCRIPT_DIR}/litellm-compose.yml" down --remove-orphans 2>/dev/null || true
+    fi
+    for img in ghcr.io/berriai/litellm; do
+        if docker image ls --format '{{.Repository}}' 2>/dev/null | grep -q "${img}"; then
+            info "Removing LiteLLM image: ${img}"
+            docker image rm "${img}" 2>/dev/null || true
+        fi
+    done
+fi
+
+info "Legacy service cleanup done."
+
+# --------------------------------------------------------------------------- #
+# 3b. Install gpu-clear script
 # --------------------------------------------------------------------------- #
 info "Installing gpu-clear script..."
 sudo cp "$(dirname "$0")/gpu-clear" /usr/local/bin/gpu-clear
@@ -209,12 +373,11 @@ sudo chmod +x /usr/local/bin/gpu-clear
 info "gpu-clear installed to /usr/local/bin/gpu-clear"
 
 # --------------------------------------------------------------------------- #
-# 4. Pull models
+# 4. Pull Ollama models (embedding + autocomplete only)
 # --------------------------------------------------------------------------- #
-info "Pulling models — this will take a while on first run..."
+info "Pulling Ollama models (embedding + autocomplete)..."
 
 # If a pre-fetched model cache exists, seed OLLAMA_MODELS_DIR from it first.
-# ollama pull will then detect existing blobs and skip re-downloading them.
 PRELOAD_MODELS="${PRELOAD_DIR}/models"
 if [[ -d "${PRELOAD_MODELS}/blobs" ]]; then
     info "Found pre-fetched model cache at ${PRELOAD_MODELS} — seeding model store..."
@@ -223,34 +386,32 @@ if [[ -d "${PRELOAD_MODELS}/blobs" ]]; then
     info "Model cache seeded. ollama pull will skip already-present blobs."
 fi
 
-for model in "${MODELS[@]}"; do
-    if ollama list | awk 'NR>1 {print $1}' | grep -Fxq "${model}"; then
-        info "Already present locally, skipping pull: ${model}"
-    else
-        info "Pulling ${model}..."
-        ollama pull "${model}"
-        info "Done: ${model}"
-    fi
+for model in "${OLLAMA_MODELS[@]}"; do
+    OLLAMA_HOST=127.0.0.1:11436 ollama list | awk 'NR>1 {print $1}' | grep -Fxq "${model}" \
+        && info "Already present locally, skipping pull: ${model}" \
+        || { info "Pulling ${model}..."; OLLAMA_HOST=127.0.0.1:11436 ollama pull "${model}"; info "Done: ${model}"; }
 done
 
-# Remove models that are no longer part of the active stack to free disk space.
-# Safe to extend this list as model families are upgraded.
+# Remove LLM models that are no longer part of the active stack (LiteLLM/Qwen3.5 era).
+# llama-server now serves all chat inference; these Ollama models are stale.
 STALE_MODELS=(
     "qwen3.5:35b"
+    "qwen3.5:27b-q8_0"
+    "qwen3.5:9b"
     "devstral-small-2"
     "deepseek-r1:32b"
     "qwen2.5-coder:14b"
     "deepseek-r1:7b"
 )
 for model in "${STALE_MODELS[@]}"; do
-    if ollama list | awk 'NR>1 {print $1}' | grep -Fxq "${model}"; then
-        info "Removing stale model: ${model}"
-        ollama rm "${model}"
+    if OLLAMA_HOST=127.0.0.1:11436 ollama list | awk 'NR>1 {print $1}' | grep -Fxq "${model}"; then
+        info "Removing stale model from Ollama: ${model}"
+        OLLAMA_HOST=127.0.0.1:11436 ollama rm "${model}"
     fi
 done
 
 # --------------------------------------------------------------------------- #
-# 5. Install Docker (if not present) and start OpenHands
+# 5. Install Docker (needed for SearXNG and Qdrant)
 # --------------------------------------------------------------------------- #
 info "Checking Docker..."
 if command -v docker &>/dev/null; then
@@ -268,44 +429,6 @@ fi
 
 sudo systemctl enable docker
 sudo systemctl start docker
-
-info "Starting OpenHands background agent..."
-COMPOSE_FILE="${SCRIPT_DIR}/openhands-compose.yml"
-[[ -f "${COMPOSE_FILE}" ]] || die "openhands-compose.yml not found at ${COMPOSE_FILE}"
-
-# Heads-up for tight disks: OpenHands images plus writable layers are several GB.
-FREE_GB=$(df -BG /var/lib/docker 2>/dev/null | awk 'NR==2{gsub("G","",$4); print $4}')
-if [[ -n "${FREE_GB:-}" ]] && (( FREE_GB < 25 )); then
-    warn "Only ${FREE_GB}G free on /var/lib/docker. OpenHands image pulls may fail."
-    warn "If needed, clean old Docker cache: sudo docker system prune -af"
-fi
-
-pull_ok=0
-for ((i=1; i<=OPENHANDS_PULL_RETRIES; i++)); do
-    info "Pulling OpenHands images (attempt ${i}/${OPENHANDS_PULL_RETRIES})..."
-    if docker compose -f "${COMPOSE_FILE}" pull --quiet; then
-        pull_ok=1
-        break
-    fi
-    if (( i < OPENHANDS_PULL_RETRIES )); then
-        warn "OpenHands pull failed (attempt ${i}). Retrying in ${OPENHANDS_PULL_DELAY_SECS}s..."
-        sleep "${OPENHANDS_PULL_DELAY_SECS}"
-    fi
-done
-
-if (( pull_ok == 1 )); then
-    if docker compose -f "${COMPOSE_FILE}" up -d; then
-        info "OpenHands started — accessible at http://aleatico2.imago7.local:3000"
-    else
-        warn "OpenHands container failed to start. Continuing setup of remaining services."
-        warn "Check logs: docker compose -f ${COMPOSE_FILE} logs --tail=100"
-    fi
-else
-    warn "OpenHands image pull failed after ${OPENHANDS_PULL_RETRIES} attempts"
-    warn "(often DNS/firewall/registry issue)."
-    warn "Continuing setup of remaining services. Retry later with:"
-    warn "  docker compose -f ${COMPOSE_FILE} pull && docker compose -f ${COMPOSE_FILE} up -d"
-fi
 
 # --------------------------------------------------------------------------- #
 # 6. Install lab knowledge MCP service
@@ -500,7 +623,7 @@ docker compose -f "${SCRIPT_DIR}/qdrant-compose.yml" up -d
 info "Qdrant started on 0.0.0.0:6333 (LAN/VPN accessible)."
 info "Roo Code codebase indexing settings:"
 info "  Embedder Provider : Ollama"
-info "  Base URL          : http://aleatico2.imago7.local:11434"
+info "  Base URL          : http://aleatico2.imago7.local:11436"
 info "  API Key           : (leave empty)"
 info "  Model             : nomic-embed-text"
 info "  Model Dimension   : 768"
@@ -508,43 +631,12 @@ info "  Qdrant URL        : http://aleatico2.imago7.local:6333"
 info "  Qdrant API Key    : (leave empty)"
 
 # Ensure embedding model is present (needed by lab-knowledge indexing/search).
-if ollama list | awk 'NR>1 {print $1}' | grep -Eq '^nomic-embed-text(:|$)'; then
+if OLLAMA_HOST=127.0.0.1:11436 ollama list | awk 'NR>1 {print $1}' | grep -Eq '^nomic-embed-text(:|$)'; then
     info "Embedding model already present: nomic-embed-text"
 else
     info "Pulling required embedding model: nomic-embed-text..."
-    ollama pull nomic-embed-text
+    OLLAMA_HOST=127.0.0.1:11436 ollama pull nomic-embed-text
 fi
-
-# --------------------------------------------------------------------------- #
-# 10. Start LiteLLM proxy (timeout fix + thinking display for Roo Code)
-# --------------------------------------------------------------------------- #
-info "Starting LiteLLM proxy (port 4000)..."
-LITELLM_COMPOSE="${SCRIPT_DIR}/litellm-compose.yml"
-[[ -f "${LITELLM_COMPOSE}" ]] || die "litellm-compose.yml not found at ${LITELLM_COMPOSE}"
-
-# Pull image first (may take a minute on first run)
-docker compose -f "${LITELLM_COMPOSE}" pull --quiet
-if docker compose -f "${LITELLM_COMPOSE}" up -d; then
-    info "LiteLLM proxy started on 0.0.0.0:4000."
-    info "  Roo Code base URL:  http://aleatico2.imago7.local:4000/v1"
-    info "  Usage dashboard:    http://aleatico2.imago7.local:4000/ui"
-else
-    warn "LiteLLM container failed to start. Continuing setup."
-    warn "Check logs: docker compose -f ${LITELLM_COMPOSE} logs --tail=100"
-    warn "Clients can fall back to Ollama directly at :11434/v1 until this is fixed."
-fi
-
-# Wait briefly for LiteLLM to be ready
-for i in {1..12}; do
-    if curl -sf http://127.0.0.1:4000/health > /dev/null 2>&1; then
-        info "✓ LiteLLM is healthy."
-        break
-    fi
-    sleep 5
-    if [[ $i -eq 12 ]]; then
-        warn "LiteLLM did not respond at :4000 within 60 s. Check: docker compose -f ${LITELLM_COMPOSE} logs -f"
-    fi
-done
 
 # --------------------------------------------------------------------------- #
 # 11. Verify
@@ -552,28 +644,28 @@ done
 info ""
 info "=== Setup complete. Verification ==="
 info ""
-info "Loaded models (may take a moment for first load):"
-ollama list
+info "llama-server status:"
+systemctl is-active llama-server && info "  ✓ llama-server.service is active" || warn "  ✗ llama-server.service is NOT active"
 
 info ""
 info "GPU memory usage:"
-nvidia-smi --query-gpu=name,memory.used,memory.free --format=csv,noheader 2>/dev/null || \
+nvidia-smi --query-gpu=name,memory.used,memory.free,memory.total --format=csv,noheader 2>/dev/null || \
     warn "nvidia-smi not found — check GPU manually."
 
 info ""
-info "Test the API (via LiteLLM proxy — what Roo Code uses):"
-info "  curl http://127.0.0.1:4000/v1/models"
-info "Test Ollama directly:"
-info "  curl http://127.0.0.1:11434/api/tags"
+info "Test the OpenAI-compatible API (llama-server — what Roo Code uses):"
+info "  curl http://127.0.0.1:11434/v1/models"
+info "  curl http://aleatico2.imago7.local:11434/v1/models"
+info ""
+info "Test embeddings (Ollama internal instance):"
+info "  OLLAMA_HOST=127.0.0.1:11436 ollama list"
 info ""
 info "To manually flush GPU memory before a CUDA job:"
 info "  gpu-clear"
 info ""
-info "OpenHands (background agent): http://aleatico2.imago7.local:3000"
 info "Lab knowledge MCP:            http://aleatico2.imago7.local:3001/sse"
 info "Lab status dashboard:          http://aleatico2.imago7.local:3002"
 info "Web search MCP:                http://aleatico2.imago7.local:3003/sse"
-info "LiteLLM proxy (Roo Code):     http://aleatico2.imago7.local:4000/v1"
-info "LiteLLM usage dashboard:       http://aleatico2.imago7.local:4000/ui"
+info "llama-server (Roo Code/LLM):  http://aleatico2.imago7.local:11434/v1"
 info ""
 info "Each lab member should run onboard.sh once from a VSCode Remote-SSH terminal."
