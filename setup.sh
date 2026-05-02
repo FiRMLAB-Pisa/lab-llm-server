@@ -60,6 +60,39 @@ warn()  { echo "[WARN]  $*"; }
 die()   { echo "[ERROR] $*" >&2; exit 1; }
 require_cmd() { command -v "$1" &>/dev/null || die "Required command '$1' not found."; }
 
+find_nvcc() {
+    if command -v nvcc &>/dev/null; then
+        command -v nvcc
+        return 0
+    fi
+
+    local candidate
+    for candidate in \
+        /usr/local/cuda/bin/nvcc \
+        /usr/local/cuda-*/bin/nvcc \
+        /opt/cuda/bin/nvcc
+    do
+        if [[ -x "${candidate}" ]]; then
+            echo "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+ensure_cuda_compiler() {
+    local nvcc_path=""
+    if nvcc_path="$(find_nvcc)"; then
+        export PATH="$(dirname "${nvcc_path}"):${PATH}"
+        export CUDACXX="${nvcc_path}"
+        info "Using CUDA compiler: ${nvcc_path}"
+        return 0
+    fi
+
+    die "CUDA compiler 'nvcc' not found. Install CUDA toolkit (dev package), then re-run setup. On Ubuntu: sudo apt-get install -y nvidia-cuda-toolkit"
+}
+
 install_python_venv_deps() {
     # Best-effort install of system packages needed for python -m venv + pip.
     if command -v apt-get &>/dev/null; then
@@ -95,6 +128,8 @@ done
 if [[ "${LLAMA_FOUND}" -eq 0 ]]; then
     require_cmd cmake
     require_cmd make
+    require_cmd git
+    ensure_cuda_compiler
     info "llama-server not found. Building llama.cpp from source with CUDA support..."
     BUILD_DIR="/opt/llama.cpp"
     sudo mkdir -p "${BUILD_DIR}"
@@ -104,7 +139,17 @@ if [[ "${LLAMA_FOUND}" -eq 0 ]]; then
     else
         git -C "${BUILD_DIR}" pull --ff-only
     fi
-    cmake -B "${BUILD_DIR}/build" -S "${BUILD_DIR}" -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+
+    # A previous failed CUDA probe can poison CMakeCache with CMAKE_CUDA_COMPILER-NOTFOUND.
+    if [[ -f "${BUILD_DIR}/build/CMakeCache.txt" ]] && grep -q "CMAKE_CUDA_COMPILER:FILEPATH=CMAKE_CUDA_COMPILER-NOTFOUND" "${BUILD_DIR}/build/CMakeCache.txt"; then
+        warn "Clearing stale CMake cache with CMAKE_CUDA_COMPILER-NOTFOUND"
+        rm -rf "${BUILD_DIR}/build"
+    fi
+
+    cmake -B "${BUILD_DIR}/build" -S "${BUILD_DIR}" \
+        -DGGML_CUDA=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_COMPILER="${CUDACXX}"
     cmake --build "${BUILD_DIR}/build" --config Release -j"$(nproc)"
     sudo cp "${BUILD_DIR}/build/bin/llama-server" /usr/local/bin/llama-server
     sudo chmod +x /usr/local/bin/llama-server
