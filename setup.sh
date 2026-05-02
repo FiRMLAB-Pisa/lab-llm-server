@@ -146,10 +146,7 @@ if [[ "${LLAMA_FOUND}" -eq 0 ]]; then
         rm -rf "${BUILD_DIR}/build"
     fi
 
-    cmake -B "${BUILD_DIR}/build" -S "${BUILD_DIR}" \
-        -DGGML_CUDA=ON \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CUDA_COMPILER="${CUDACXX}"
+    cmake -B "${BUILD_DIR}/build" -S "${BUILD_DIR}" -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_COMPILER="$(which nvcc)"
     cmake --build "${BUILD_DIR}/build" --config Release -j"$(nproc)"
     sudo cp "${BUILD_DIR}/build/bin/llama-server" /usr/local/bin/llama-server
     sudo chmod +x /usr/local/bin/llama-server
