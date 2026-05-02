@@ -233,6 +233,9 @@ exec ${LLAMA_SERVER_BIN} \\
   --temp 0.6 \\
   --top-k 20 \\
   --top-p 0.95 \\
+  --min-p 0.0 \\
+  --repeat_penalty 1.0 \\
+  --presence_penalty 0.0 \\
   --batch-size 512 \\
   --ubatch-size 512 \\
   --host 0.0.0.0 \\
