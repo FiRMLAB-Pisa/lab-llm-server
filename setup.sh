@@ -173,14 +173,16 @@ if [[ -f "${LLAMA_MODEL_PATH}" ]]; then
     info "Model already present at ${LLAMA_MODEL_PATH}. Skipping download."
 else
     require_cmd curl
-    info "Downloading Qwen3.6-35B-A3B-UD-Q4_K_M.gguf from HuggingFace (unsloth)..."
+    info "Downloading Qwen3.6-35B-A3B-UD-Q4_K_M.gguf from HuggingFace (unsloth, ~24 GB)..."
     HF_URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-    CURL_FLAGS="-fL --progress-bar"
+    CURL_FLAGS="-fL --progress-bar --http1.1 --retry 3 --retry-delay 5 --max-time 3600"
     if [[ "${DISABLE_SSL_VERIFY_FOR_HF}" == "1" ]]; then
         CURL_FLAGS="${CURL_FLAGS} --insecure"
         warn "SSL verification disabled for HuggingFace download (DISABLE_SSL_VERIFY_FOR_HF=1)."
     fi
-    sudo curl ${CURL_FLAGS} -o "${LLAMA_MODEL_PATH}" "${HF_URL}"
+    if ! sudo curl ${CURL_FLAGS} -o "${LLAMA_MODEL_PATH}" "${HF_URL}"; then
+        die "Download failed. Manual fallback: sudo curl -fL -o ${LLAMA_MODEL_PATH} '${HF_URL}'"
+    fi
     info "Model downloaded to ${LLAMA_MODEL_PATH}."
 fi
 
