@@ -172,18 +172,37 @@ sudo mkdir -p "$(dirname "${LLAMA_MODEL_PATH}")"
 if [[ -f "${LLAMA_MODEL_PATH}" ]]; then
     info "Model already present at ${LLAMA_MODEL_PATH}. Skipping download."
 else
-    require_cmd curl
-    info "Downloading Qwen3.6-35B-A3B-UD-Q4_K_M.gguf from HuggingFace (unsloth, ~24 GB)..."
+    info "Model not found at ${LLAMA_MODEL_PATH}. Attempting download from HuggingFace..."
     HF_URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-    CURL_FLAGS="-fL --progress-bar --http1.1 --retry 3 --retry-delay 5 --max-time 3600"
-    if [[ "${DISABLE_SSL_VERIFY_FOR_HF}" == "1" ]]; then
-        CURL_FLAGS="${CURL_FLAGS} --insecure"
-        warn "SSL verification disabled for HuggingFace download (DISABLE_SSL_VERIFY_FOR_HF=1)."
+    
+    # Try curl with HTTP/1.1 (HTTP/2 often fails with HuggingFace CDN)
+    if command -v curl &>/dev/null; then
+        if sudo curl -fL --http1.1 --retry 2 --retry-delay 5 --max-time 3600 --progress-bar -o "${LLAMA_MODEL_PATH}" "${HF_URL}" 2>/dev/null; then
+            info "Model downloaded successfully to ${LLAMA_MODEL_PATH}."
+        else
+            warn "HuggingFace download failed. Common workarounds:"
+            warn ""
+            warn "1. Download on a machine with good internet, rsync to here:"
+            warn "   On the download machine:"
+            warn "     curl -fL -o Qwen3.6-35B-A3B-UD-Q4_K_M.gguf '${HF_URL}'"
+            warn "   Then from aleatico2:"
+            warn "     rsync -av user@download-machine:~/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf /tmp/"
+            warn "     sudo mv /tmp/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf ${LLAMA_MODEL_PATH}"
+            warn ""
+            warn "2. Use wget (if available):"
+            warn "     sudo wget -O ${LLAMA_MODEL_PATH} '${HF_URL}'"
+            warn ""
+            warn "3. Use aria2c for resume capability:"
+            warn "     sudo apt-get install aria2c"
+            warn "     sudo aria2c -o Qwen3.6-35B-A3B-UD-Q4_K_M.gguf '${HF_URL}'"
+            warn "     sudo mv Qwen3.6-35B-A3B-UD-Q4_K_M.gguf ${LLAMA_MODEL_PATH}"
+            warn ""
+            warn "After obtaining the model manually, re-run: sudo bash setup.sh"
+            warn "Setup will continue without the model and fail at runtime, but you can finish onboarding."
+        fi
+    else
+        warn "curl not found. Use one of the manual methods above."
     fi
-    if ! sudo curl ${CURL_FLAGS} -o "${LLAMA_MODEL_PATH}" "${HF_URL}"; then
-        die "Download failed. Manual fallback: sudo curl -fL -o ${LLAMA_MODEL_PATH} '${HF_URL}'"
-    fi
-    info "Model downloaded to ${LLAMA_MODEL_PATH}."
 fi
 
 # --------------------------------------------------------------------------- #
