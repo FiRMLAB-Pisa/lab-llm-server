@@ -60,6 +60,34 @@ warn()  { echo "[WARN]  $*"; }
 die()   { echo "[ERROR] $*" >&2; exit 1; }
 require_cmd() { command -v "$1" &>/dev/null || die "Required command '$1' not found."; }
 
+llama_supports_required_flags() {
+    local bin="$1"
+    local help
+
+    if [[ ! -x "${bin}" ]]; then
+        return 1
+    fi
+
+    help="$(${bin} --help 2>&1 || true)"
+    [[ -n "${help}" ]] || return 1
+
+    local required
+    for required in \
+        "--reasoning-format" \
+        "--chat-template-kwargs" \
+        "--cache-type-k" \
+        "--cache-type-v" \
+        "--flash-attn" \
+        "--jinja"
+    do
+        if ! grep -q -- "${required}" <<< "${help}"; then
+            return 1
+        fi
+    done
+
+    return 0
+}
+
 find_nvcc() {
     if command -v nvcc &>/dev/null; then
         command -v nvcc
@@ -116,16 +144,23 @@ info "Setting up llama-server (main inference backend)..."
 
 # Check if llama-server is already available in PATH or at a standard location.
 LLAMA_FOUND=0
+LLAMA_NEEDS_REBUILD=0
 for candidate in "${LLAMA_SERVER_BIN}" /usr/local/bin/llama-server /opt/llama.cpp/build/bin/llama-server; do
     if [[ -x "${candidate}" ]]; then
-        info "Found llama-server at ${candidate}."
+        if llama_supports_required_flags "${candidate}"; then
+            info "Found compatible llama-server at ${candidate}."
+            LLAMA_SERVER_BIN="${candidate}"
+            LLAMA_FOUND=1
+            break
+        fi
+
+        warn "Found llama-server at ${candidate}, but it does not support required flags. Will rebuild from source."
         LLAMA_SERVER_BIN="${candidate}"
-        LLAMA_FOUND=1
-        break
+        LLAMA_NEEDS_REBUILD=1
     fi
 done
 
-if [[ "${LLAMA_FOUND}" -eq 0 ]]; then
+if [[ "${LLAMA_FOUND}" -eq 0 || "${LLAMA_NEEDS_REBUILD}" -eq 1 ]]; then
     require_cmd cmake
     require_cmd make
     require_cmd git
