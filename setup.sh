@@ -268,7 +268,7 @@ exec ${LLAMA_SERVER_BIN} \\
   -c ${LLAMA_CONTEXT} \\
   --parallel ${LLAMA_PARALLEL} \\
   -ngl 99 \\
-  --flash-attn \\
+    --flash-attn on \\
   --no-mmap \\
   --cache-type-k q4_0 \\
   --cache-type-v q4_0 \\
