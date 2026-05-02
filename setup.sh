@@ -240,6 +240,17 @@ else
     fi
 fi
 
+# Validate that the model looks like a GGUF file before starting llama-server.
+if [[ ! -r "${LLAMA_MODEL_PATH}" ]]; then
+    die "Model file is missing or not readable: ${LLAMA_MODEL_PATH}"
+fi
+
+MODEL_MAGIC="$(head -c 4 "${LLAMA_MODEL_PATH}" 2>/dev/null || true)"
+if [[ "${MODEL_MAGIC}" != "GGUF" ]]; then
+    die "Model at ${LLAMA_MODEL_PATH} is not a GGUF file (magic='${MODEL_MAGIC}'). If you symlinked from Ollama blobs, ensure it points to the actual GGUF blob."
+fi
+info "Model file sanity check OK (GGUF header detected)."
+
 # --------------------------------------------------------------------------- #
 # 1c. Install llama-server systemd service
 # --------------------------------------------------------------------------- #
@@ -313,7 +324,12 @@ for i in {1..30}; do
     fi
     sleep 3
     if [[ $i -eq 30 ]]; then
-        warn "llama-server did not respond in time. Check: journalctl -u llama-server -n 50"
+        warn "llama-server did not respond in time. Printing quick diagnostics..."
+        if ! systemctl is-active --quiet llama-server; then
+            warn "llama-server.service is not active"
+        fi
+        sudo systemctl status llama-server --no-pager -l || true
+        sudo journalctl -u llama-server -n 80 --no-pager || true
     fi
 done
 
